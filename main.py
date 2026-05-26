@@ -2,6 +2,7 @@
 病棟勤務表 自動作成システム - FastAPI サーバー
 """
 
+import calendar
 import os
 from typing import Any, Dict, List
 
@@ -28,9 +29,11 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 class GenerateRequest(BaseModel):
     staff_ids: List[str]
+    staff_floors: List[int] = []
+    staff_sections: List[str] = []
     dates: List[Any]
     schedule: List[List[str]]
-    settings: Dict[str, int]
+    settings: Dict[str, Any]
 
 
 class DownloadRequest(BaseModel):
@@ -92,11 +95,12 @@ async def generate(request: GenerateRequest):
     """
     # バリデーション
     required_keys = [
+        "year",
+        "month",
         "day_leader_count",
         "night_leader_count",
-        "required_staff_per_day",
+        "night_eligible_count",
         "max_night_shifts",
-        "days_off",
     ]
     for key in required_keys:
         if key not in request.settings:
@@ -106,10 +110,14 @@ async def generate(request: GenerateRequest):
             )
 
     try:
-        num_days = len(request.dates)
+        year = int(request.settings["year"])
+        month = int(request.settings["month"])
         schedule, warnings = generate_shift(
             staff_ids=request.staff_ids,
-            num_days=num_days,
+            staff_floors=request.staff_floors,
+            staff_sections=request.staff_sections,
+            year=year,
+            month=month,
             schedule=request.schedule,
             settings=request.settings,
         )

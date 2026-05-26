@@ -83,25 +83,10 @@
                 </div>
                 <div class="flex items-center justify-between">
                     <label class="text-xs font-medium text-gray-600">
-                        1日の日勤必要人数
-                    </label>
-                    <input type="number" id="requiredPerDay" value="5" min="1"
-                        class="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                </div>
-                <div class="flex items-center justify-between">
-                    <label class="text-xs font-medium text-gray-600">
                         月間夜勤上限
                         <span class="text-gray-400">（1人）</span>
                     </label>
                     <input type="number" id="maxNightShifts" value="5" min="0"
-                        class="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-                </div>
-                <div class="flex items-center justify-between">
-                    <label class="text-xs font-medium text-gray-600">
-                        公休日数
-                        <span class="text-gray-400">（1人）</span>
-                    </label>
-                    <input type="number" id="daysOff" value="9" min="0"
                         class="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                 </div>
             </div>
@@ -191,6 +176,7 @@
                 </h2>
                 <div id="legend" class="flex flex-wrap gap-2 text-xs">
                     <span class="shift-legend shift-day">日=日勤</span>
+                    <span class="shift-legend shift-day7b">7b=7b勤務</span>
                     <span class="shift-legend shift-night">夜=夜勤</span>
                     <span class="shift-legend shift-morning-after">明=明け</span>
                     <span class="shift-legend shift-holiday">公=公休</span>
@@ -213,6 +199,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=7"></script>
 </body>
 </html>

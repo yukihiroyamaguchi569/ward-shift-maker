@@ -54,18 +54,19 @@ targetMonth.addEventListener("change", () => {
 // プリセット機能
 // =========================================================
 
-const SETTING_KEYS = ["dayLeaderCount", "nightLeaderCount", "nightEligibleCount", "requiredPerDay", "maxNightShifts", "daysOff"];
+const SETTING_KEYS = ["dayLeaderCount", "nightLeaderCount", "nightEligibleCount", "maxNightShifts"];
 
 const DEFAULT_PRESETS = {
     "デフォルト": {
         dayLeaderCount: 10,
         nightLeaderCount: 8,
         nightEligibleCount: 17,
-        requiredPerDay: 5,
         maxNightShifts: 5,
-        daysOff: 9,
     }
 };
+
+// スタッフごとの階（3/4）と区分（日/7b）
+let staffMeta = {};
 
 const presetSelect = document.getElementById("presetSelect");
 const presetSaveBtn = document.getElementById("presetSaveBtn");
@@ -181,12 +182,19 @@ loadPresets();
 
 const SHIFT_CLASS_MAP = {
     "日": "shift-day",
+    "7b": "shift-day7b",
     "夜": "shift-night",
+    "★": "shift-night",   // 夜勤リーダー
+    "☆": "shift-night",   // 夜勤
     "明": "shift-morning-after",
+    "～": "shift-morning-after",  // 夜勤明け
+    "～⋆": "shift-morning-after",
+    "〜": "shift-morning-after",
+    "〜⋆": "shift-morning-after",
     "公": "shift-holiday",
+    "休": "shift-holiday",
     "希": "shift-requested",
     "委": "shift-committee",
-    "休": "shift-other",
     "有": "shift-other",
     "研": "shift-other",
 };
@@ -249,6 +257,7 @@ async function handleFileUpload(file) {
         uploadedData = await res.json();
         originalSchedule = uploadedData.schedule.map(row => [...row]);
         generatedSchedule = null;
+        staffMeta = {};
 
         // ファイル情報表示
         fileName.textContent = file.name;
@@ -285,11 +294,16 @@ async function generateShift() {
     try {
         showLoading(true);
 
+        const staff_floors = uploadedData.staff_ids.map(sid => (staffMeta[sid] && staffMeta[sid].floor) || 3);
+        const staff_sections = uploadedData.staff_ids.map(sid => (staffMeta[sid] && staffMeta[sid].section) || "日");
+
         const res = await fetch("/api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 staff_ids: uploadedData.staff_ids,
+                staff_floors: staff_floors,
+                staff_sections: staff_sections,
                 dates: uploadedData.dates,
                 schedule: originalSchedule.map(row => [...row]),
                 settings: settings,
@@ -376,14 +390,24 @@ downloadBtn.addEventListener("click", async () => {
 // =========================================================
 
 function getSettings() {
+    const monthVal = targetMonth.value || "";
+    const [yearStr, monthStr] = monthVal.split("-");
+    const year = parseInt(yearStr) || new Date().getFullYear();
+    const month = parseInt(monthStr) || (new Date().getMonth() + 1);
     return {
+        year,
+        month,
         day_leader_count: parseInt(document.getElementById("dayLeaderCount").value) || 10,
         night_leader_count: parseInt(document.getElementById("nightLeaderCount").value) || 8,
         night_eligible_count: parseInt(document.getElementById("nightEligibleCount").value) || 17,
-        required_staff_per_day: parseInt(document.getElementById("requiredPerDay").value) || 5,
         max_night_shifts: parseInt(document.getElementById("maxNightShifts").value) || 5,
-        days_off: parseInt(document.getElementById("daysOff").value) || 9,
     };
+}
+
+function getDaysOffTarget() {
+    const monthVal = targetMonth.value || "";
+    const month = parseInt((monthVal.split("-") || [])[1]) || 0;
+    return month === 2 ? 8 : 9;
 }
 
 // =========================================================
@@ -392,16 +416,16 @@ function getSettings() {
 
 function renderTable(staffIds, dates, schedule, original = null) {
     const settings = getSettings();
+    const daysOffTarget = getDaysOffTarget();
     let html = "";
 
     // ヘッダー行
     html += "<thead><tr>";
-    html += "<th>職員番号</th>";
+    html += "<th>職員番号</th><th>階</th><th>区分</th>";
     for (const date of dates) {
         const dayClass = getDayClass(date);
         html += `<th class="${dayClass}">${date}</th>`;
     }
-    // 統計列
     html += '<th class="stats-col">夜</th>';
     html += '<th class="stats-col">日</th>';
     html += '<th class="stats-col">公</th>';
@@ -410,7 +434,9 @@ function renderTable(staffIds, dates, schedule, original = null) {
     // データ行
     html += "<tbody>";
     for (let i = 0; i < staffIds.length; i++) {
-        // 行のクラス（リーダー表示）
+        const sid = staffIds[i];
+        const meta = staffMeta[sid] || { floor: 3, section: "日" };
+
         let rowClass = "";
         if (i < settings.night_leader_count) {
             rowClass = "leader-row";
@@ -419,9 +445,23 @@ function renderTable(staffIds, dates, schedule, original = null) {
         }
 
         html += `<tr class="${rowClass}">`;
-        html += `<td>${staffIds[i]}</td>`;
+        html += `<td>${sid}</td>`;
 
-        // 統計カウンター
+        // 階セレクタ
+        html += `<td>
+            <select class="floor-select text-xs border rounded px-1" data-staff-id="${sid}">
+                <option value="3"${meta.floor === 3 ? " selected" : ""}>3階</option>
+                <option value="4"${meta.floor === 4 ? " selected" : ""}>4階</option>
+            </select>
+        </td>`;
+        // 区分セレクタ
+        html += `<td>
+            <select class="section-select text-xs border rounded px-1" data-staff-id="${sid}">
+                <option value="日"${meta.section === "日" ? " selected" : ""}>日</option>
+                <option value="7b"${meta.section === "7b" ? " selected" : ""}>7b</option>
+            </select>
+        </td>`;
+
         let nightCount = 0;
         let dayCount = 0;
         let offCount = 0;
@@ -431,45 +471,47 @@ function renderTable(staffIds, dates, schedule, original = null) {
             const isFixed = original ? (original[i][j] && original[i][j].trim() !== "") : false;
             const cellClass = getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
-
             html += `<td class="${cellClass}${fixedClass}">${shift}</td>`;
 
-            // 統計
-            if (shift === "夜") nightCount++;
-            if (shift === "日") dayCount++;
+            if (["夜", "★", "☆"].includes(shift)) nightCount++;
+            if (["日", "7b"].includes(shift)) dayCount++;
             if (["公", "希", "休", "有"].includes(shift)) offCount++;
         }
 
-        // 統計列（バッジ表示）
         const nightBadge = getStatBadge(nightCount, settings.max_night_shifts, "night");
-        const offBadge = getStatBadge(offCount, settings.days_off, "off");
-
+        const offBadge = getStatBadge(offCount, daysOffTarget, "off");
         html += `<td class="stats-col">${nightBadge}</td>`;
         html += `<td class="stats-col">${dayCount}</td>`;
         html += `<td class="stats-col">${offBadge}</td>`;
         html += "</tr>";
     }
 
-    // 日別統計行
+    // 日別統計行（日勤計 = 日 + 7b の合算）
     html += '<tr class="font-semibold bg-gray-50">';
-    html += "<td>日勤計</td>";
+    html += "<td colspan=\"3\">日勤計</td>";
     for (let j = 0; j < dates.length; j++) {
+        const dow = getDow(dates[j]);
+        const required = dow === 0 ? 9 : 5; // 日曜=9人(3階5+4階4), 平日/土=5人(日4+7b1)
         let dayTotal = 0;
         for (let i = 0; i < staffIds.length; i++) {
-            if (schedule[i] && schedule[i][j] === "日") dayTotal++;
+            const sh = schedule[i] && schedule[i][j] ? schedule[i][j] : "";
+            if (sh === "日" || sh === "7b") dayTotal++;
+            // 固定日勤扱い（委/研など）もカウント
+            const origSh = original && original[i][j] ? original[i][j].trim() : "";
+            if (origSh && !["公","希","休","有","夜","明","日","7b",""].includes(origSh)) dayTotal++;
         }
-        const shortage = dayTotal < settings.required_staff_per_day;
+        const shortage = dayTotal < required;
         html += `<td class="${shortage ? 'text-red-600 font-bold' : 'text-gray-600'}">${dayTotal}</td>`;
     }
     html += '<td class="stats-col"></td><td class="stats-col"></td><td class="stats-col"></td>';
     html += "</tr>";
 
     html += '<tr class="font-semibold bg-gray-50">';
-    html += "<td>夜勤計</td>";
+    html += "<td colspan=\"3\">夜勤計</td>";
     for (let j = 0; j < dates.length; j++) {
         let nightTotal = 0;
         for (let i = 0; i < staffIds.length; i++) {
-            if (schedule[i] && schedule[i][j] === "夜") nightTotal++;
+            if (schedule[i] && ["夜","★","☆"].includes(schedule[i][j])) nightTotal++;
         }
         const shortage = nightTotal < 2;
         html += `<td class="${shortage ? 'text-red-600 font-bold' : 'text-gray-600'}">${nightTotal}</td>`;
@@ -481,6 +523,33 @@ function renderTable(staffIds, dates, schedule, original = null) {
 
     scheduleTable.innerHTML = html;
     showPanel(tablePanel);
+    bindStaffMetaHandlers();
+}
+
+function getDow(dateStr) {
+    const monthVal = targetMonth.value;
+    if (!monthVal) return -1;
+    const [yearStr, monthStr] = monthVal.split("-");
+    const day = parseInt(dateStr);
+    if (isNaN(day)) return -1;
+    return new Date(parseInt(yearStr), parseInt(monthStr) - 1, day).getDay(); // 0=日, 6=土
+}
+
+function bindStaffMetaHandlers() {
+    document.querySelectorAll(".floor-select").forEach(sel => {
+        sel.addEventListener("change", () => {
+            const sid = sel.dataset.staffId;
+            if (!staffMeta[sid]) staffMeta[sid] = { floor: 3, section: "日" };
+            staffMeta[sid].floor = parseInt(sel.value);
+        });
+    });
+    document.querySelectorAll(".section-select").forEach(sel => {
+        sel.addEventListener("change", () => {
+            const sid = sel.dataset.staffId;
+            if (!staffMeta[sid]) staffMeta[sid] = { floor: 3, section: "日" };
+            staffMeta[sid].section = sel.value;
+        });
+    });
 }
 
 function getCellClass(shift) {

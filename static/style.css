@@ -240,6 +240,12 @@ body {
     color: #333333;
 }
 
+.shift-day7b {
+    background-color: #e8f5e9 !important;
+    color: #2e7d32;
+    font-weight: 600;
+}
+
 .shift-night {
     background-color: #1e3a5f !important;
     color: #ffffff !important;
