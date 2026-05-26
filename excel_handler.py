@@ -45,44 +45,35 @@ def read_excel(file_bytes: bytes) -> Dict[str, Any]:
     wb = load_workbook(BytesIO(file_bytes), data_only=True)
     ws = wb.active
 
-    # ヘッダー行を探す（数値が連続する行をヘッダーとみなす）
     header_row = 1
+    start_col = None
     dates = []
 
-    for row_idx in range(1, min(ws.max_row + 1, 5)):
-        row_dates = []
-        for col in range(2, ws.max_column + 1):
-            val = ws.cell(row_idx, col).value
-            if val is not None:
-                try:
-                    day_num = int(val)
-                    if 1 <= day_num <= 31:
-                        row_dates.append(day_num)
-                except (ValueError, TypeError):
-                    pass
-        # 連続した日付が5個以上あればヘッダー行と判定
-        if len(row_dates) >= 5:
-            header_row = row_idx
-            break
-
-    # 日付ヘッダーを取得
     for col in range(2, ws.max_column + 1):
         val = ws.cell(header_row, col).value
-        if val is not None:
-            try:
-                day_num = int(val)
-                if 1 <= day_num <= 31:
-                    dates.append(day_num)
-                else:
-                    dates.append(val)
-            except (ValueError, TypeError):
-                dates.append(val)
-        else:
-            # 空ヘッダーの場合、前の日付+1を推定
-            if dates and isinstance(dates[-1], int):
-                dates.append(dates[-1] + 1)
-            else:
+        try:
+            if int(val) == 1:
+                start_col = col
                 break
+        except (ValueError, TypeError):
+            continue
+
+    if start_col is None:
+        raise ValueError("1行目で日付 '1' が入っている列を見つけられませんでした。")
+
+    expected_day = 1
+    for col in range(start_col, ws.max_column + 1):
+        val = ws.cell(header_row, col).value
+        try:
+            day_num = int(val)
+        except (ValueError, TypeError):
+            break
+
+        if day_num != expected_day or not 1 <= day_num <= 31:
+            break
+
+        dates.append(day_num)
+        expected_day += 1
 
     num_date_cols = len(dates)
 
@@ -98,7 +89,7 @@ def read_excel(file_bytes: bytes) -> Dict[str, Any]:
         staff_ids.append(str(staff_id).strip())
 
         row_data = []
-        for col in range(2, 2 + num_date_cols):
+        for col in range(start_col, start_col + num_date_cols):
             val = ws.cell(row_idx, col).value
             if val is None:
                 row_data.append("")
