@@ -230,6 +230,24 @@ def generate_shift(
         model.Add(night_spread == max_nights - min_nights)
         objective_terms.append(night_spread * 100)
 
+    # 各スタッフの夜勤間隔均等化（月を3ブロックに分割してブロック間ばらつきを最小化）
+    K = 3
+    for s in range(night_eligible_count):
+        block_ns = []
+        for k in range(K):
+            start = k * (day_count // K)
+            end = (k + 1) * (day_count // K) if k < K - 1 else day_count
+            bn = model.NewIntVar(0, max_night_shifts, f"block_n_{s}_{k}")
+            model.Add(bn == sum(is_leader[s, d] + is_pair[s, d] for d in range(start, end)))
+            block_ns.append(bn)
+        max_bn = model.NewIntVar(0, max_night_shifts, f"max_bn_{s}")
+        min_bn = model.NewIntVar(0, max_night_shifts, f"min_bn_{s}")
+        model.AddMaxEquality(max_bn, block_ns)
+        model.AddMinEquality(min_bn, block_ns)
+        block_spread = model.NewIntVar(0, max_night_shifts, f"block_spread_{s}")
+        model.Add(block_spread == max_bn - min_bn)
+        objective_terms.append(block_spread * 50)
+
     # ☆ はできるだけリーダー候補外から選ぶ。
     leader_pair_penalty = sum(
         is_pair[s, d]
