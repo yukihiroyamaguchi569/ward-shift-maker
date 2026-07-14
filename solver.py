@@ -1,8 +1,8 @@
 """
-夜勤セットだけを組む勤務表ソルバー。
+夜勤セットと日勤を組む勤務表ソルバー。
 
-night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットのみを生成する。
-それ以外の未入力セルは空欄のまま残す。
+night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットと、
+毎日の日勤（日）を生成する。それ以外の未入力セルは空欄のまま残す。
 """
 
 import calendar
@@ -15,11 +15,13 @@ HOLIDAY = "公"
 AFTER = "明"
 LEADER_NIGHT = "★"
 PAIR_NIGHT = "☆"
+DAY_SHIFT = "日"
 
 OFF_TYPES = {"公", "希", "休", "有"}
 LEADER_MARKS = {LEADER_NIGHT}
 PAIR_MARKS = {PAIR_NIGHT, "夜"}  # 既存データ互換
 AFTER_MARKS = {AFTER, "～", "～⋆", "〜", "〜⋆"}
+DAY_MARKS = {DAY_SHIFT, "7b"}
 
 
 def _normalize_cell(text: str) -> str:
@@ -48,6 +50,8 @@ def _classify(text: str) -> str:
         return "after"
     if text in OFF_TYPES:
         return "off"
+    if text in DAY_MARKS:
+        return "day"
     return "fixed_other"
 
 
@@ -70,6 +74,8 @@ def generate_shift(
     night_leader_count = min(int(settings["night_leader_count"]), staff_count)
     night_eligible_count = min(int(settings["night_eligible_count"]), staff_count)
     max_night_shifts = int(settings["max_night_shifts"])
+    day_leader_count = min(int(settings["day_leader_count"]), staff_count)
+    day_required_count = int(settings.get("day_required_count", 5))
 
     normalized = []
     for row in schedule:
@@ -189,6 +195,24 @@ def generate_shift(
                     )
                 )
 
+    # 日勤・夜勤を担える人数が足りない日がないか、単純な人数勘定で確認する。
+    # （固定の休み・明けなどで埋まっているスタッフは日勤にも夜勤にも入れない）
+    for d in range(day_count):
+        fixed_other_count = sum(
+            1 for s in range(staff_count) if fixed_types[s][d] == "fixed_other"
+        )
+        available = sum(
+            1
+            for s in range(staff_count)
+            if fixed_types[s][d] in {"blank", "day", "leader_night", "pair_night"}
+        )
+        needed = max(0, day_required_count - fixed_other_count) + 2
+        if available < needed:
+            conflict_warnings.append(
+                f"{d + 1}日: 日勤{day_required_count}人と夜勤2人を確保できません"
+                f"（配置可能 {available}人 / 必要 {needed}人。固定の休み・明けが多すぎる可能性があります）。"
+            )
+
     if conflict_warnings:
         return pre_completion_normalized, conflict_warnings
 
@@ -239,6 +263,11 @@ def generate_shift(
         for s in range(staff_count)
         for d in range(day_count)
     }
+    is_day = {
+        (s, d): model.NewBoolVar(f"day_{s}_{d}")
+        for s in range(staff_count)
+        for d in range(day_count)
+    }
 
     for s in range(staff_count):
         for d in range(day_count):
@@ -249,6 +278,7 @@ def generate_shift(
                     is_after[s, d],
                     is_leader[s, d],
                     is_pair[s, d],
+                    is_day[s, d],
                 ]
             )
 
@@ -258,8 +288,10 @@ def generate_shift(
         "after": is_after,
         "leader_night": is_leader,
         "pair_night": is_pair,
-        # 日勤等の固定セルはソルバー上は空欄扱いにし、前日夜勤の禁止は
+        "day": is_day,
+        # 委/研など日勤扱いの固定セルはソルバー上は空欄扱いにし、前日夜勤の禁止は
         # 「固定セルが夜勤セットと衝突するなら、その前日は夜勤不可」の制約側で担保する。
+        # 日勤必要人数のカウントには定数として加算する。
         "fixed_other": is_blank,
     }
     for s in range(staff_count):
@@ -284,6 +316,23 @@ def generate_shift(
     for d in range(day_count):
         model.Add(sum(is_leader[s, d] for s in range(staff_count)) == 1)
         model.Add(sum(is_pair[s, d] for s in range(staff_count)) == 1)
+
+    # 日勤配置（第一段階）: 毎日（日曜含む）日勤を day_required_count 人以上確保する。
+    # 委/研など日勤扱いの固定セル（fixed_other）は、フロントの日勤計の集計に合わせて
+    # 定数としてカウントに含める。
+    for d in range(day_count):
+        fixed_other_count = sum(
+            1 for s in range(staff_count) if fixed_types[s][d] == "fixed_other"
+        )
+        model.Add(
+            sum(is_day[s, d] for s in range(staff_count)) + fixed_other_count
+            >= day_required_count
+        )
+
+    # 日勤のうち1人は日勤リーダー候補（上から day_leader_count 人）から配置する。
+    # リーダーは実際の日勤（is_day、固定の日/7b 含む）であること。fixed_other は数えない。
+    for d in range(day_count):
+        model.Add(sum(is_day[s, d] for s in range(day_leader_count)) >= 1)
 
     # 夜勤3日セット: 夜勤 -> 明け -> 公休
     for s in range(staff_count):
@@ -390,6 +439,17 @@ def generate_shift(
     )
     objective_terms.append(leader_pair_penalty * 1000)
 
+    # ソルバーが配置する日勤（固定でないセル）1つにつき重み1のコストを与え、
+    # 必要数を超える不要な日勤配置を抑える。重み1は既存の重み
+    # （1000/100/50/-30）より十分小さく、夜勤配置の判断には実質影響しない。
+    placed_day_penalty = sum(
+        is_day[s, d]
+        for s in range(staff_count)
+        for d in range(day_count)
+        if fixed_types[s][d] == "blank"
+    )
+    objective_terms.append(placed_day_penalty * 1)
+
     model.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
@@ -406,6 +466,14 @@ def generate_shift(
         if total_capacity < required_nights:
             warnings.append(
                 f"夜勤要員不足: 必要 {required_nights} 回、最大 {total_capacity} 回です。"
+            )
+        # 日勤必要人数が原因になり得るかの単純なヒント
+        # （1日あたり: 日勤 day_required_count 人 + 夜勤2人 + 明け2人）
+        daily_min_staff = day_required_count + 2 + 2
+        if staff_count < daily_min_staff:
+            warnings.append(
+                f"日勤要員不足の可能性: 1日あたり日勤{day_required_count}人＋夜勤2人＋明け2人"
+                f"（計{daily_min_staff}人）が必要ですが、職員数は{staff_count}人です。"
             )
         return pre_completion_normalized, warnings
 
@@ -426,6 +494,8 @@ def generate_shift(
                 result[s][d] = AFTER
             elif solver.Value(is_off[s, d]):
                 result[s][d] = HOLIDAY
+            elif solver.Value(is_day[s, d]):
+                result[s][d] = DAY_SHIFT
             else:
                 result[s][d] = BLANK
 
