@@ -371,6 +371,17 @@ def generate_shift(
         model.Add(block_spread == max_bn - min_bn)
         objective_terms.append(block_spread * 50)
 
+    # 希望休（希）は夜勤セット3日目の公休を兼ねてよい（確定仕様）。
+    # 「希」の2日前が空欄なら、そこに夜勤を置く配置をボーナスで優先する（ソフト条件）。
+    # 重み30は既存の重み（ペア候補違反1000・ばらつき100・ブロック分散50）より小さくし、
+    # 公平性を崩してまで兼ねることはしない。対象は「希」のみ（公・有などは対象外）。
+    for s in range(night_eligible_count):
+        for d in range(day_count):
+            if normalized[s][d] != "希":
+                continue
+            if d - 2 >= 0 and fixed_types[s][d - 2] == "blank":
+                objective_terms.append(-30 * (is_leader[s, d - 2] + is_pair[s, d - 2]))
+
     # ☆ はできるだけリーダー候補外から選ぶ。
     leader_pair_penalty = sum(
         is_pair[s, d]
