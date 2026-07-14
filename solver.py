@@ -83,6 +83,115 @@ def generate_shift(
         for s in range(staff_count)
     ]
 
+    # 補完（明・公の自動補完）前の状態を保持しておく。ソルバー実行前の警告や
+    # INFEASIBLE 時には、入力と異なる表を返さないようこちらを返す。
+    pre_completion_normalized = [row[:] for row in normalized]
+
+    # --- 固定入力の事前バリデーション ---
+    # モデルを構築する前に、固定★/☆/明などの入力同士や設定と矛盾する箇所を検出する。
+    # ここで矛盾が見つかった場合はソルバーを実行せず、原因を特定できる警告とともに
+    # 補完前の入力をそのまま返す。
+    def _fmt(s: int, d: int, message: str) -> str:
+        return f"職員{staff_ids[s]}: {d + 1}日 {message}"
+
+    conflict_warnings: List[str] = []
+
+    # 夜勤可能人数の圏外に固定★/☆がある。
+    for s in range(night_eligible_count, staff_count):
+        for d in range(day_count):
+            if fixed_types[s][d] in {"leader_night", "pair_night"}:
+                conflict_warnings.append(
+                    _fmt(
+                        s,
+                        d,
+                        f"夜勤可能人数（上から{night_eligible_count}人まで）の対象外ですが、"
+                        f"固定で夜勤（{normalized[s][d]}）が入力されています。",
+                    )
+                )
+
+    # 夜勤リーダー可能人数の圏外に固定★がある。
+    for s in range(night_leader_count, staff_count):
+        for d in range(day_count):
+            if fixed_types[s][d] == "leader_night":
+                conflict_warnings.append(
+                    _fmt(
+                        s,
+                        d,
+                        f"夜勤リーダー可能人数（上から{night_leader_count}人まで）の対象外ですが、"
+                        "固定でリーダー夜勤（★）が入力されています。",
+                    )
+                )
+
+    # 固定夜勤の翌日・翌々日に、夜勤3日セットと矛盾する固定値がある。
+    for s in range(staff_count):
+        for d in range(day_count):
+            if fixed_types[s][d] not in {"leader_night", "pair_night"}:
+                continue
+            mark = normalized[s][d]
+            if d + 1 < day_count and fixed_types[s][d + 1] not in {"blank", "after"}:
+                conflict_warnings.append(
+                    _fmt(
+                        s,
+                        d,
+                        f"固定夜勤（{mark}）の翌日（{d + 2}日）に固定「{normalized[s][d + 1]}」"
+                        "が入力されており、夜勤明け（明）と矛盾します。",
+                    )
+                )
+            if d + 2 < day_count and fixed_types[s][d + 2] not in {"blank", "off"}:
+                conflict_warnings.append(
+                    _fmt(
+                        s,
+                        d,
+                        f"固定夜勤（{mark}）の翌々日（{d + 3}日）に固定「{normalized[s][d + 2]}」"
+                        "が入力されており、公休と矛盾します。",
+                    )
+                )
+
+    # 固定夜勤の回数が月間夜勤上限を超えている。
+    for s in range(staff_count):
+        fixed_night_count = sum(
+            1 for d in range(day_count) if fixed_types[s][d] in {"leader_night", "pair_night"}
+        )
+        if fixed_night_count > max_night_shifts:
+            conflict_warnings.append(
+                f"職員{staff_ids[s]}: 固定夜勤の回数が{fixed_night_count}回あり、"
+                f"月間夜勤上限（{max_night_shifts}回）を超えています。"
+            )
+
+    # 同じ日に固定★または固定☆が2人以上いる。
+    for d in range(day_count):
+        leader_fixed = [s for s in range(staff_count) if fixed_types[s][d] == "leader_night"]
+        pair_fixed = [s for s in range(staff_count) if fixed_types[s][d] == "pair_night"]
+        if len(leader_fixed) > 1:
+            names = "、".join(f"職員{staff_ids[s]}" for s in leader_fixed)
+            conflict_warnings.append(
+                f"{d + 1}日: 固定★が{len(leader_fixed)}人（{names}）入力されています。1日1人にしてください。"
+            )
+        if len(pair_fixed) > 1:
+            names = "、".join(f"職員{staff_ids[s]}" for s in pair_fixed)
+            conflict_warnings.append(
+                f"{d + 1}日: 固定☆が{len(pair_fixed)}人（{names}）入力されています。1日1人にしてください。"
+            )
+
+    # 月途中の固定「明」の前日が、夜勤になり得ない固定値になっている。
+    for s in range(staff_count):
+        for d in range(day_count):
+            if d == 0 or fixed_types[s][d] != "after":
+                continue
+            prev_type = fixed_types[s][d - 1]
+            if prev_type not in {"blank", "leader_night", "pair_night"}:
+                conflict_warnings.append(
+                    _fmt(
+                        s,
+                        d,
+                        f"固定の明けですが、前日（{d}日）が固定「{normalized[s][d - 1]}」"
+                        "で夜勤になり得ないため矛盾しています。",
+                    )
+                )
+
+    if conflict_warnings:
+        return pre_completion_normalized, conflict_warnings
+
     # 固定夜勤がある場合は、空欄にだけ「明」「公」を補完する。
     for s in range(staff_count):
         for d in range(day_count):
@@ -94,6 +203,14 @@ def generate_shift(
             if d + 2 < day_count and fixed_types[s][d + 2] == "blank":
                 fixed_types[s][d + 2] = "off"
                 normalized[s][d + 2] = HOLIDAY
+
+    # 月初の固定「明」（前月末の夜勤セットの持ち越し）は、2日目が空欄なら「公」を補完する。
+    for s in range(staff_count):
+        if fixed_types[s][0] != "after":
+            continue
+        if day_count > 1 and fixed_types[s][1] == "blank":
+            fixed_types[s][1] = "off"
+            normalized[s][1] = HOLIDAY
 
     model = cp_model.CpModel()
 
@@ -141,6 +258,8 @@ def generate_shift(
         "after": is_after,
         "leader_night": is_leader,
         "pair_night": is_pair,
+        # 日勤等の固定セルはソルバー上は空欄扱いにし、前日夜勤の禁止は
+        # 「固定セルが夜勤セットと衝突するなら、その前日は夜勤不可」の制約側で担保する。
         "fixed_other": is_blank,
     }
     for s in range(staff_count):
@@ -176,10 +295,14 @@ def generate_shift(
                 model.AddImplication(is_leader[s, d], is_off[s, d + 2])
                 model.AddImplication(is_pair[s, d], is_off[s, d + 2])
 
-    # 明けは前日夜勤の翌日のみ。ただし月初の固定明けは前月またぎとして許容。
+    # 明けは前日夜勤の翌日のみ。ただし月初の固定明けは前月またぎとして許容する。
+    # 月途中の固定明けは、前日に夜勤（★/☆）が入ることを制約として強制する
+    # （前日が夜勤になり得ない固定値の場合は事前バリデーションで検出済み）。
     for s in range(staff_count):
         for d in range(day_count):
             if fixed_types[s][d] == "after":
+                if d > 0:
+                    model.Add(is_after[s, d] <= is_leader[s, d - 1] + is_pair[s, d - 1])
                 continue
             if d == 0:
                 model.Add(is_after[s, d] == 0)
@@ -273,7 +396,7 @@ def generate_shift(
             warnings.append(
                 f"夜勤要員不足: 必要 {required_nights} 回、最大 {total_capacity} 回です。"
             )
-        return [row[:] for row in normalized], warnings
+        return pre_completion_normalized, warnings
 
     result = [[BLANK] * day_count for _ in range(staff_count)]
     for s in range(staff_count):
