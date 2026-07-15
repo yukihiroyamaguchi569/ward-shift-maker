@@ -27,13 +27,25 @@ PAIR_MARKS = {PAIR_NIGHT, "夜"}  # 既存データ互換
 AFTER_MARKS = {AFTER, "～", "～⋆", "〜", "〜⋆"}
 DAY_MARKS = {DAY_SHIFT, DAY_SHIFT_7B}
 
+# 同義語の正規化（出力セルは正規化後の1文字表記になる。既存の 休→公 と同じ挙動）
+SYNONYM_MARKS = {
+    "休": HOLIDAY,
+    "公休": HOLIDAY,
+    "希望休": "希",
+    "希望": "希",
+    "有休": "有",
+    "有給": "有",
+    "明け": AFTER,
+    "夜勤": PAIR_NIGHT,
+}
+
 
 def _normalize_cell(text: str) -> str:
     value = text.strip()
     if value == "":
         return BLANK
-    if value == "休":
-        return HOLIDAY
+    if value in SYNONYM_MARKS:
+        return SYNONYM_MARKS[value]
     if value in LEADER_MARKS:
         return LEADER_NIGHT
     if value in PAIR_MARKS:
