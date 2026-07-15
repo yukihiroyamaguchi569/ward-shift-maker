@@ -9,6 +9,7 @@
 let uploadedData = null;   // { staff_ids, dates, schedule }
 let originalSchedule = null; // アップロード時の元データ（再作成用）
 let generatedSchedule = null; // 生成済みスケジュール
+let generatedDayLeaders = null; // 日ごとの日勤リーダー staff_id リスト
 
 // =========================================================
 // DOM要素
@@ -46,7 +47,8 @@ targetMonth.addEventListener("change", () => {
     if (uploadedData) {
         const sched = generatedSchedule || uploadedData.schedule;
         const orig = generatedSchedule ? originalSchedule : null;
-        renderTable(uploadedData.staff_ids, uploadedData.dates, sched, orig);
+        const leaders = generatedSchedule ? generatedDayLeaders : null;
+        renderTable(uploadedData.staff_ids, uploadedData.dates, sched, orig, leaders);
     }
 });
 
@@ -257,6 +259,7 @@ async function handleFileUpload(file) {
         uploadedData = await res.json();
         originalSchedule = uploadedData.schedule.map(row => [...row]);
         generatedSchedule = null;
+        generatedDayLeaders = null;
         staffMeta = {};
 
         // ファイル情報表示
@@ -317,6 +320,7 @@ async function generateShift() {
 
         const result = await res.json();
         generatedSchedule = result.schedule;
+        generatedDayLeaders = result.day_leaders || null;
 
         // ボタン有効化・ラベルを「再作成」に変更
         generateBtn.textContent = "再作成";
@@ -327,7 +331,8 @@ async function generateShift() {
             uploadedData.staff_ids,
             uploadedData.dates,
             generatedSchedule,
-            originalSchedule
+            originalSchedule,
+            generatedDayLeaders
         );
 
         // 警告表示
@@ -361,6 +366,7 @@ downloadBtn.addEventListener("click", async () => {
                 staff_ids: uploadedData.staff_ids,
                 dates: uploadedData.dates,
                 schedule: generatedSchedule,
+                day_leaders: generatedDayLeaders,
             }),
         });
 
@@ -414,7 +420,7 @@ function getDaysOffTarget() {
 // テーブル描画
 // =========================================================
 
-function renderTable(staffIds, dates, schedule, original = null) {
+function renderTable(staffIds, dates, schedule, original = null, dayLeaders = null) {
     const settings = getSettings();
     const daysOffTarget = getDaysOffTarget();
     let html = "";
@@ -471,7 +477,8 @@ function renderTable(staffIds, dates, schedule, original = null) {
             const isFixed = original ? (original[i][j] && original[i][j].trim() !== "") : false;
             const cellClass = getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
-            html += `<td class="${cellClass}${fixedClass}">${shift}</td>`;
+            const leaderClass = dayLeaders && dayLeaders[j] === sid ? " shift-day-leader" : "";
+            html += `<td class="${cellClass}${fixedClass}${leaderClass}">${shift}</td>`;
 
             if (["夜", "★", "☆"].includes(shift)) nightCount++;
             if (["日", "7b"].includes(shift)) dayCount++;

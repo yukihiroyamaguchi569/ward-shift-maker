@@ -282,6 +282,14 @@ body {
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
+/* 日勤リーダー（文字は「日」のまま、色と枠で明示。shift-day と共存） */
+.shift-day-leader {
+    background-color: #fff1f2 !important;
+    box-shadow: inset 0 0 0 2px #e11d48 !important;
+    color: #be123c !important;
+    font-weight: 700;
+}
+
 /* =========================================================
    凡例（ピル型）
    ========================================================= */

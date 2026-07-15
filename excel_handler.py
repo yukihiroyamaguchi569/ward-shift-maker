@@ -108,9 +108,13 @@ def write_excel(
     staff_ids: List[str],
     dates: List,
     schedule: List[List[str]],
+    day_leaders: List = None,
 ) -> bytes:
     """
     勤務表データからエクセルファイルを生成してバイト列で返す
+
+    day_leaders: 日ごとの日勤リーダーの staff_id リスト（None 可）。
+    リーダーのセルは背景色（薄い黄色）のみ付け、文字は一切変更しない。
     """
     wb = Workbook()
     ws = wb.active
@@ -174,6 +178,18 @@ def write_excel(
                     size=10,
                     color=colors["fg"],
                     bold=(shift == "夜"),
+                )
+
+            # 日勤リーダーのセルは背景色（薄い黄色）のみ付ける（文字は変更しない）
+            if (
+                day_leaders
+                and col_idx < len(day_leaders)
+                and day_leaders[col_idx] == staff_id
+            ):
+                cell.fill = PatternFill(
+                    start_color="FFF2CC",
+                    end_color="FFF2CC",
+                    fill_type="solid",
                 )
 
     # フリーズペイン（1行目とA列を固定）
