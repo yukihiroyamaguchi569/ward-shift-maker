@@ -2,7 +2,9 @@
 全セルを確定させる勤務表ソルバー。
 
 night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットに加え、
-日勤（日/7b、所属区分に従う）と公休（公）で全セルを確定した勤務表を生成する。
+日勤（日/7b）と公休（公）で全セルを確定した勤務表を生成する。
+7b はスタッフの属性ではなく日ごとの割り当てで、日曜以外は毎日1人を
+日勤者の中からソルバーが選ぶ（同一スタッフが日により日/7bを担当する）。
 公休は1人あたり最低9日（2月のみ8日）で、希・有もカウントに含む
 （固定の休みがこれを超える場合はその日数を許容する）。
 毎日1人の日勤リーダーを日勤リーダー候補から選び、返り値 day_leaders で明示する
@@ -75,13 +77,12 @@ def _classify(text: str) -> str:
 def generate_shift(
     staff_ids: List[str],
     staff_floors: List[int],
-    staff_sections: List[str],
     year: int,
     month: int,
     schedule: List[List[str]],
     settings: Dict,
 ) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
-    del staff_floors
+    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
 
     staff_count = len(staff_ids)
     day_count = calendar.monthrange(year, month)[1]
@@ -94,12 +95,6 @@ def generate_shift(
     day_required_count = int(settings.get("day_required_count", 5))
     # 公休日数: 2月のみ8日、他の月は9日（settings で上書き可能）
     off_target = int(settings.get("days_off_count", 8 if month == 2 else 9))
-
-    # 所属区分（"日" / "7b"）。未設定は "日" にフォールバック（app.js と同じ挙動）。
-    sections = []
-    for s in range(staff_count):
-        raw = staff_sections[s] if s < len(staff_sections) else "日"
-        sections.append(DAY_SHIFT_7B if str(raw).strip() == DAY_SHIFT_7B else DAY_SHIFT)
 
     empty_day_leaders: List[Optional[str]] = [None] * day_count
 
@@ -203,6 +198,19 @@ def generate_shift(
             names = "、".join(f"職員{staff_ids[s]}" for s in pair_fixed)
             conflict_warnings.append(
                 f"{d + 1}日: 固定☆が{len(pair_fixed)}人（{names}）入力されています。1日1人にしてください。"
+            )
+
+    # 同じ日（日曜以外）に固定「7b」が2人以上いる（7b は日曜以外1日1人）。
+    for d in range(day_count):
+        if calendar.weekday(year, month, d + 1) == 6:  # 日曜
+            continue
+        seven_b_fixed = [
+            s for s in range(staff_count) if normalized[s][d] == DAY_SHIFT_7B
+        ]
+        if len(seven_b_fixed) > 1:
+            names = "、".join(f"職員{staff_ids[s]}" for s in seven_b_fixed)
+            conflict_warnings.append(
+                f"{d + 1}日: 固定7bが{len(seven_b_fixed)}人（{names}）入力されています。1日1人にしてください。"
             )
 
     # 月途中の固定「明」の前日が、夜勤になり得ない固定値になっている。
@@ -325,6 +333,12 @@ def generate_shift(
         for s in range(staff_count)
         for d in range(day_count)
     }
+    # 7b は日勤の一種（人の属性ではなく日ごとの割り当てとしてソルバーが選ぶ）
+    is_7b = {
+        (s, d): model.NewBoolVar(f"7b_{s}_{d}")
+        for s in range(staff_count)
+        for d in range(day_count)
+    }
     # 日勤リーダー（毎日1人、日勤リーダー候補=上から day_leader_count 人から選ぶ）
     is_day_leader = {
         (s, d): model.NewBoolVar(f"day_leader_{s}_{d}")
@@ -403,25 +417,23 @@ def generate_shift(
         for d in range(day_count):
             model.Add(is_day_leader[s, d] <= is_day[s, d])
 
-    # 7b の確保: 日曜以外の日は、7b マークになる日勤
-    # （所属 7b のスタッフの is_day ＋ 所属外スタッフの固定「7b」）を1人以上。
-    has_7b_staff = any(sec == DAY_SHIFT_7B for sec in sections)
-    if not has_7b_staff:
-        warnings.append(
-            "所属 7b のスタッフがいないため、7b 日勤の確保（日曜以外1人以上）はスキップしました。"
-        )
-    else:
+    # 7b の割り当て: 7b は日勤の一種で、日曜以外は毎日ちょうど1人。
+    # ソルバーは日曜に 7b を置かない（固定「7b」はそのまま尊重する）。
+    for s in range(staff_count):
         for d in range(day_count):
-            if calendar.weekday(year, month, d + 1) == 6:  # 日曜
-                continue
-            terms = []
-            fixed_7b_count = 0
-            for s in range(staff_count):
-                if sections[s] == DAY_SHIFT_7B:
-                    terms.append(is_day[s, d])
-                elif normalized[s][d] == DAY_SHIFT_7B:
-                    fixed_7b_count += 1
-            model.Add(sum(terms) + fixed_7b_count >= 1)
+            model.Add(is_7b[s, d] <= is_day[s, d])
+            if normalized[s][d] == DAY_SHIFT_7B:
+                # 固定「7b」: 日勤かつ 7b に固定（is_day == 1 は fixed_map で固定済み）
+                model.Add(is_7b[s, d] == 1)
+            elif normalized[s][d] == DAY_SHIFT:
+                # 固定「日」: 出力の文字が変わらないよう 7b にしない
+                model.Add(is_7b[s, d] == 0)
+            elif calendar.weekday(year, month, d + 1) == 6:  # 日曜
+                model.Add(is_7b[s, d] == 0)
+    for d in range(day_count):
+        if calendar.weekday(year, month, d + 1) == 6:  # 日曜
+            continue
+        model.Add(sum(is_7b[s, d] for s in range(staff_count)) == 1)
 
     # 公休日数: 目標（off_target）は最低限。各スタッフの休み（固定の公・希・有＋
     # ソルバー配置の公）の合計を max(目標, 固定 off 数) に一致させる。
@@ -548,6 +560,21 @@ def generate_shift(
         model.Add(off_spread == max_bo - min_bo)
         objective_terms.append(off_spread * 10)
 
+    # 7b の公平化（ソフト）: スタッフごとの月間7b回数の max - min を重み5で最小化。
+    # 重み5は既存の重み（1000/100/50/10/-30）より小さくし、他の配置判断を崩さない。
+    seven_b_counts = []
+    for s in range(staff_count):
+        cnt = model.NewIntVar(0, day_count, f"seven_b_count_{s}")
+        model.Add(cnt == sum(is_7b[s, d] for d in range(day_count)))
+        seven_b_counts.append(cnt)
+    max_7b = model.NewIntVar(0, day_count, "max_7b")
+    min_7b = model.NewIntVar(0, day_count, "min_7b")
+    model.AddMaxEquality(max_7b, seven_b_counts)
+    model.AddMinEquality(min_7b, seven_b_counts)
+    seven_b_spread = model.NewIntVar(0, day_count, "seven_b_spread")
+    model.Add(seven_b_spread == max_7b - min_7b)
+    objective_terms.append(seven_b_spread * 5)
+
     # 希望休（希）は夜勤セット3日目の公休を兼ねてよい（確定仕様）。
     # 「希」の2日前が空欄なら、そこに夜勤を置く配置をボーナスで優先する（ソフト条件）。
     # 重み30は既存の重み（ペア候補違反1000・ばらつき100・ブロック分散50）より小さくし、
@@ -612,8 +639,8 @@ def generate_shift(
             elif solver.Value(is_off[s, d]):
                 result[s][d] = HOLIDAY
             elif solver.Value(is_day[s, d]):
-                # ソルバーが置く日勤のマークは所属区分に従う。
-                result[s][d] = DAY_SHIFT_7B if sections[s] == DAY_SHIFT_7B else DAY_SHIFT
+                # 7b が立っていれば「7b」、それ以外の日勤は「日」。
+                result[s][d] = DAY_SHIFT_7B if solver.Value(is_7b[s, d]) else DAY_SHIFT
             else:
                 result[s][d] = BLANK
 
