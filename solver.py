@@ -6,7 +6,8 @@ night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットに
 7b はスタッフの属性ではなく日ごとの割り当てで、日曜以外は毎日1人を
 日勤者の中からソルバーが選ぶ（同一スタッフが日により日/7bを担当する）。
 公休は1人あたり最低9日（2月のみ8日）で、希・有もカウントに含む
-（固定の休みがこれを超える場合はその日数を許容する）。
+（固定の休みがこれを超える場合はその日数を許容し、連勤制限を満たす
+ために必要な場合はソルバーが休みを追加できる）。
 毎日1人の日勤リーダーを日勤リーダー候補から選び、返り値 day_leaders で明示する
 （セルの文字は「日」のまま変更しない）。
 """
@@ -229,6 +230,41 @@ def generate_shift(
                     )
                 )
 
+    # 夜勤（★/☆）を置ける候補がいない日を検出する。
+    # 空欄セルが夜勤セットを開始できる必要条件: 当日が空欄、翌日が空欄/明、
+    # 翌々日が空欄/休（月末をまたぐ場合は当該チェック不要）。
+    def _night_open(s: int, d: int) -> bool:
+        if fixed_types[s][d] != "blank":
+            return False
+        if d + 1 < day_count and fixed_types[s][d + 1] not in {"blank", "after"}:
+            return False
+        if d + 2 < day_count and fixed_types[s][d + 2] not in {"blank", "off"}:
+            return False
+        return True
+
+    for d in range(day_count):
+        star_capable = sum(
+            1
+            for s in range(night_leader_count)
+            if fixed_types[s][d] == "leader_night" or _night_open(s, d)
+        )
+        if star_capable == 0:
+            conflict_warnings.append(
+                f"{d + 1}日: 夜勤リーダー候補（上から{night_leader_count}人）の誰も★に入れません。"
+                "固定入力または夜勤リーダー可能人数を見直してください。"
+            )
+        night_capable = sum(
+            1
+            for s in range(night_eligible_count)
+            if fixed_types[s][d] in {"leader_night", "pair_night"} or _night_open(s, d)
+        )
+        if night_capable < 2:
+            conflict_warnings.append(
+                f"{d + 1}日: 夜勤可能候補（上から{night_eligible_count}人）のうち夜勤（★/☆）に"
+                f"入れるのが{night_capable}人しかいません（毎日★1人＋☆1人の2人が必要です）。"
+                "固定入力または夜勤可能人数を見直してください。"
+            )
+
     # 日勤・夜勤を担える人数が足りない日がないか、単純な人数勘定で確認する。
     # （固定の休み・明けなどで埋まっているスタッフは日勤にも夜勤にも入れない）
     for d in range(day_count):
@@ -248,7 +284,8 @@ def generate_shift(
             )
 
     # 月全体の人数勘定（厳密ではない下限チェック）。
-    # 各スタッフの勤務コマ数は day_count - max(off_target, 固定off数) で確定するため、
+    # 休みは最低 max(off_target, 固定off数) で、連勤制限などにより実際には
+    # さらに増え得るため、これは楽観的な（勤務コマ数を多めに見積もる）下限チェック。
     # 夜勤2人/日＋明け（2日目以降2人/日）＋日勤必要人数＋固定日勤扱いセルの
     # 合計を下回る場合は勤務表を作成できない。
     total_work_cells = sum(
@@ -436,17 +473,23 @@ def generate_shift(
         model.Add(sum(is_7b[s, d] for s in range(staff_count)) == 1)
 
     # 公休日数: 目標（off_target）は最低限。各スタッフの休み（固定の公・希・有＋
-    # ソルバー配置の公）の合計を max(目標, 固定 off 数) に一致させる。
-    # 等式にするのは、(a) 目標未満にしない、(b) 固定休が目標超過ならそのまま許容、
-    # (c) ソルバーが不必要に公休を増やして不公平になるのを防ぐため（>= にしない）。
+    # ソルバー配置の公）の合計を max(目標, 固定 off 数) 以上にする（下限のみ）。
+    # 等式にしないのは、固定休の並びによっては5連勤制限などのハード制約を満たす
+    # ために最低ラインを超える休みが必要になるため（等式だと INFEASIBLE になる）。
+    # 不要な水増しは下の extra_off ペナルティで抑える。
+    min_off_by_staff: List[int] = []
+    extra_off_vars = []
     for s in range(staff_count):
         fixed_off_count = sum(
             1 for d in range(day_count) if fixed_types[s][d] == "off"
         )
-        model.Add(
-            sum(is_off[s, d] for d in range(day_count))
-            == max(off_target, fixed_off_count)
-        )
+        min_off = max(off_target, fixed_off_count)
+        min_off_by_staff.append(min_off)
+        off_sum = sum(is_off[s, d] for d in range(day_count))
+        model.Add(off_sum >= min_off)
+        extra_off = model.NewIntVar(0, day_count, f"extra_off_{s}")
+        model.Add(extra_off == off_sum - min_off)
+        extra_off_vars.append(extra_off)
 
     # 夜勤3日セット: 夜勤 -> 明け -> 公休
     for s in range(staff_count):
@@ -560,6 +603,13 @@ def generate_shift(
         model.Add(off_spread == max_bo - min_bo)
         objective_terms.append(off_spread * 10)
 
+    # 最低ラインを超えた休み1日につき重み50のペナルティ。
+    # 重み50の根拠: 公休ブロック分散（重み10）や希望休ボーナス（-30）で得をする
+    # ための休みの水増しを防ぎつつ、5連勤制限などのハード制約が必要とする追加休は
+    # 妨げない（ハード制約は目的関数の重みと無関係に常に優先される）。
+    for s in range(staff_count):
+        objective_terms.append(extra_off_vars[s] * 50)
+
     # 7b の公平化（ソフト）: スタッフごとの月間7b回数の max - min を重み5で最小化。
     # 重み5は既存の重み（1000/100/50/10/-30）より小さくし、他の配置判断を崩さない。
     seven_b_counts = []
@@ -669,7 +719,8 @@ def generate_shift(
                 f"職員{staff_ids[s]}: 夜勤 {night_total} 回（上限 {max_night_shifts} 回）"
             )
 
-    # 公休日数の検算（目標は最低限。固定休による超過は許容するため未満のみ警告）
+    # 公休日数の検算（目標は最低限。固定休による超過は許容するため未満のみ警告し、
+    # 最低ラインを超えた場合は理由が分かる情報警告を出す）
     for s in range(staff_count):
         off_total = sum(
             1 for d in range(day_count) if result[s][d] in OFF_TYPES
@@ -677,6 +728,11 @@ def generate_shift(
         if off_total < off_target:
             warnings.append(
                 f"職員{staff_ids[s]}: 休みが {off_total} 日（最低 {off_target} 日）です。"
+            )
+        elif off_total > min_off_by_staff[s]:
+            warnings.append(
+                f"職員{staff_ids[s]}: 休みが{off_total}日です"
+                f"（最低{min_off_by_staff[s]}日。連勤制限などのため追加されました）。"
             )
 
     soft_violation_days = sum(

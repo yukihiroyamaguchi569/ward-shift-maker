@@ -84,6 +84,11 @@ def read_excel(file_bytes: bytes) -> Dict[str, Any]:
     for row_idx in range(header_row + 1, ws.max_row + 1):
         staff_id = ws.cell(row_idx, 1).value
         if staff_id is None or str(staff_id).strip() == "":
+            # 職員リストの終端（空行）以降には凡例・日別集計などが並ぶため、
+            # 職員を1人以上読み込んだ後の空行で打ち切る。
+            # 最初の職員が現れる前の空行・曜日行は従来どおり読み飛ばす。
+            if staff_ids:
+                break
             continue
 
         staff_ids.append(str(staff_id).strip())
