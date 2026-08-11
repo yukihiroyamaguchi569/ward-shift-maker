@@ -31,6 +31,87 @@ PAIR_MARKS = {PAIR_NIGHT, "夜"}  # 既存データ互換
 AFTER_MARKS = {AFTER, "～", "～⋆", "〜", "〜⋆"}
 DAY_MARKS = {DAY_SHIFT, DAY_SHIFT_7B}
 
+
+class SettingsValidationError(ValueError):
+    """勤務表の生成設定が不正な場合に返す例外。"""
+
+
+def _setting_int(settings: Dict, key: str, default: Optional[int] = None) -> int:
+    """設定値を整数化し、設定名を含むエラーを返す。"""
+    value = settings.get(key, default)
+    if value is None or isinstance(value, bool):
+        raise SettingsValidationError(f"{key} は整数で指定してください。")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SettingsValidationError(f"{key} は整数で指定してください。") from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise SettingsValidationError(f"{key} は整数で指定してください。")
+    return number
+
+
+def validate_settings(
+    settings: Dict,
+    staff_count: int,
+    day_count: int,
+    default_days_off_count: int = 9,
+) -> Dict[str, int]:
+    """ソルバーを組み立てる前に、設定値の範囲と相関を検証する。
+
+    候補人数が職員数を超える場合は、従来どおり職員数まで自動的に丸める。
+    """
+    if staff_count < 1:
+        raise SettingsValidationError("staff_ids は1人以上指定してください。")
+
+    day_leader_count = _setting_int(settings, "day_leader_count")
+    night_leader_count = _setting_int(settings, "night_leader_count")
+    night_eligible_count = _setting_int(settings, "night_eligible_count")
+    max_night_shifts = _setting_int(settings, "max_night_shifts")
+    day_required_count = _setting_int(settings, "day_required_count", 5)
+    off_target = _setting_int(settings, "days_off_count", default_days_off_count)
+
+    if day_leader_count < 1:
+        raise SettingsValidationError("day_leader_count は1以上にしてください。")
+    if night_leader_count < 1:
+        raise SettingsValidationError("night_leader_count は1以上にしてください。")
+    if night_eligible_count < 2:
+        raise SettingsValidationError("night_eligible_count は2以上にしてください。")
+    if night_leader_count > night_eligible_count:
+        raise SettingsValidationError(
+            "night_leader_count は night_eligible_count 以下にしてください。"
+        )
+    if max_night_shifts < 1:
+        raise SettingsValidationError("max_night_shifts は1以上にしてください。")
+    if day_required_count < 1:
+        raise SettingsValidationError("day_required_count は1以上にしてください。")
+    if day_required_count > staff_count:
+        raise SettingsValidationError(
+            "day_required_count は職員数以下にしてください。"
+        )
+    if not 0 <= off_target <= day_count:
+        raise SettingsValidationError(
+            f"days_off_count は0以上{day_count}以下にしてください。"
+        )
+
+    # 既存仕様: 候補人数は職員数を超える場合、職員数まで丸める。
+    effective_night_leader_count = min(night_leader_count, staff_count)
+    effective_night_eligible_count = min(night_eligible_count, staff_count)
+    effective_day_leader_count = min(day_leader_count, staff_count)
+    if effective_night_eligible_count < 2:
+        raise SettingsValidationError(
+            "night_eligible_count は夜勤2人を配置できる職員数が必要です。"
+        )
+
+    return {
+        "day_leader_count": effective_day_leader_count,
+        "night_leader_count": effective_night_leader_count,
+        "night_eligible_count": effective_night_eligible_count,
+        "max_night_shifts": max_night_shifts,
+        "day_required_count": day_required_count,
+        "days_off_count": off_target,
+    }
+
+
 # 同義語の正規化（出力セルは正規化後の1文字表記になる。既存の 休→公 と同じ挙動）
 SYNONYM_MARKS = {
     "休": HOLIDAY,
@@ -89,13 +170,18 @@ def generate_shift(
     day_count = calendar.monthrange(year, month)[1]
     warnings: List[str] = []
 
-    night_leader_count = min(int(settings["night_leader_count"]), staff_count)
-    night_eligible_count = min(int(settings["night_eligible_count"]), staff_count)
-    max_night_shifts = int(settings["max_night_shifts"])
-    day_leader_count = min(int(settings["day_leader_count"]), staff_count)
-    day_required_count = int(settings.get("day_required_count", 5))
-    # 公休日数: 2月のみ8日、他の月は9日（settings で上書き可能）
-    off_target = int(settings.get("days_off_count", 8 if month == 2 else 9))
+    validated_settings = validate_settings(
+        settings,
+        staff_count,
+        day_count,
+        default_days_off_count=8 if month == 2 else 9,
+    )
+    night_leader_count = validated_settings["night_leader_count"]
+    night_eligible_count = validated_settings["night_eligible_count"]
+    max_night_shifts = validated_settings["max_night_shifts"]
+    day_leader_count = validated_settings["day_leader_count"]
+    day_required_count = validated_settings["day_required_count"]
+    off_target = validated_settings["days_off_count"]
 
     empty_day_leaders: List[Optional[str]] = [None] * day_count
 
