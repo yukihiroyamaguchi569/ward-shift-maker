@@ -364,6 +364,7 @@ downloadBtn.addEventListener("click", async () => {
                 staff_ids: uploadedData.staff_ids,
                 dates: uploadedData.dates,
                 schedule: generatedSchedule,
+                original_schedule: originalSchedule,
                 day_leaders: generatedDayLeaders,
             }),
         });
@@ -465,8 +466,14 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
 
         for (let j = 0; j < dates.length; j++) {
             const shift = schedule[i] && schedule[i][j] ? schedule[i][j] : "";
-            const isFixed = original ? (original[i][j] && original[i][j].trim() !== "") : false;
-            const cellClass = getCellClass(shift);
+            const originalShift = original
+                ? ((original[i] && original[i][j]) || "").trim()
+                : shift.trim();
+            const isFixed = original ? originalShift !== "" : false;
+            // 入力時点で休みとして指定されたセルは、生成後も「公」のまま表示される。
+            // そのため、生成結果の文字ではなく元データを見て希望休の色を決める。
+            const isRequestedOff = ["公", "希", "休", "希望休", "希望"].includes(originalShift);
+            const cellClass = isRequestedOff ? "shift-requested" : getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
             const leaderClass = dayLeaders && dayLeaders[j] === sid ? " shift-day-leader" : "";
             html += `<td class="${cellClass}${fixedClass}${leaderClass}">${shift}</td>`;
