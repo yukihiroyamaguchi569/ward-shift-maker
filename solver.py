@@ -734,8 +734,7 @@ def generate_shift(
                 f"職員{staff_ids[s]}: 夜勤 {night_total} 回（上限 {max_night_shifts} 回）"
             )
 
-    # 公休日数の検算（目標は最低限。固定休による超過は許容するため未満のみ警告し、
-    # 最低ラインを超えた場合は理由が分かる情報警告を出す）
+    # 公休日数の検算（目標は最低限。追加の公休は許容するため未満のみ警告する）
     for s in range(staff_count):
         off_total = sum(
             1 for d in range(day_count) if result[s][d] in OFF_TYPES
@@ -743,11 +742,6 @@ def generate_shift(
         if off_total < off_target:
             warnings.append(
                 f"職員{staff_ids[s]}: 休みが {off_total} 日（最低 {off_target} 日）です。"
-            )
-        elif off_total > min_off_by_staff[s]:
-            warnings.append(
-                f"職員{staff_ids[s]}: 休みが{off_total}日です"
-                f"（最低{min_off_by_staff[s]}日。連勤制限などのため追加されました）。"
             )
 
     soft_violation_days = sum(
