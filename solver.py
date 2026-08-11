@@ -124,29 +124,37 @@ def generate_shift(
 
     conflict_warnings: List[str] = []
 
-    # 夜勤可能人数の圏外に固定★/☆がある。
-    for s in range(night_eligible_count, staff_count):
+    # 通常の夜勤候補外に固定★/☆がある場合は、例外勤務として採用する。
+    # 空欄セルに対する自動配置は、下の制約で従来どおり候補内に限定する。
+    for s in range(staff_count):
         for d in range(day_count):
-            if fixed_types[s][d] in {"leader_night", "pair_night"}:
-                conflict_warnings.append(
+            fixed_type = fixed_types[s][d]
+            if fixed_type == "leader_night":
+                if s >= night_eligible_count:
+                    warnings.append(
+                        _fmt(
+                            s,
+                            d,
+                            f"夜勤可能人数（上から{night_eligible_count}人まで）の対象外ですが、"
+                            "固定のリーダー夜勤（★）を例外として採用します。",
+                        )
+                    )
+                elif s >= night_leader_count:
+                    warnings.append(
+                        _fmt(
+                            s,
+                            d,
+                            f"夜勤リーダー可能人数（上から{night_leader_count}人まで）の対象外ですが、"
+                            "固定のリーダー夜勤（★）を例外として採用します。",
+                        )
+                    )
+            elif fixed_type == "pair_night" and s >= night_eligible_count:
+                warnings.append(
                     _fmt(
                         s,
                         d,
                         f"夜勤可能人数（上から{night_eligible_count}人まで）の対象外ですが、"
-                        f"固定で夜勤（{normalized[s][d]}）が入力されています。",
-                    )
-                )
-
-    # 夜勤リーダー可能人数の圏外に固定★がある。
-    for s in range(night_leader_count, staff_count):
-        for d in range(day_count):
-            if fixed_types[s][d] == "leader_night":
-                conflict_warnings.append(
-                    _fmt(
-                        s,
-                        d,
-                        f"夜勤リーダー可能人数（上から{night_leader_count}人まで）の対象外ですが、"
-                        "固定でリーダー夜勤（★）が入力されています。",
+                        "固定の夜勤（☆）を例外として採用します。",
                     )
                 )
 
@@ -243,20 +251,24 @@ def generate_shift(
         return True
 
     for d in range(day_count):
-        star_capable = sum(
-            1
-            for s in range(night_leader_count)
-            if fixed_types[s][d] == "leader_night" or _night_open(s, d)
+        star_capable = any(
+            fixed_types[s][d] == "leader_night" for s in range(staff_count)
+        ) or any(
+            _night_open(s, d) for s in range(night_leader_count)
         )
-        if star_capable == 0:
+        if not star_capable:
             conflict_warnings.append(
                 f"{d + 1}日: 夜勤リーダー候補（上から{night_leader_count}人）の誰も★に入れません。"
                 "固定入力または夜勤リーダー可能人数を見直してください。"
             )
         night_capable = sum(
             1
+            for s in range(staff_count)
+            if fixed_types[s][d] in {"leader_night", "pair_night"}
+        ) + sum(
+            1
             for s in range(night_eligible_count)
-            if fixed_types[s][d] in {"leader_night", "pair_night"} or _night_open(s, d)
+            if _night_open(s, d)
         )
         if night_capable < 2:
             conflict_warnings.append(
@@ -421,13 +433,16 @@ def generate_shift(
     # 夜勤可能人数外は夜勤に入れない。
     for s in range(night_eligible_count, staff_count):
         for d in range(day_count):
-            model.Add(is_leader[s, d] == 0)
-            model.Add(is_pair[s, d] == 0)
+            if fixed_types[s][d] != "leader_night":
+                model.Add(is_leader[s, d] == 0)
+            if fixed_types[s][d] != "pair_night":
+                model.Add(is_pair[s, d] == 0)
 
     # 夜勤リーダー可能人数外は ★ に入れない。
     for s in range(night_leader_count, staff_count):
         for d in range(day_count):
-            model.Add(is_leader[s, d] == 0)
+            if fixed_types[s][d] != "leader_night":
+                model.Add(is_leader[s, d] == 0)
 
     # 毎日 1 人の ★ と 1 人の ☆ を配置。
     for d in range(day_count):
