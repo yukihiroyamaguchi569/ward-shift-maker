@@ -39,6 +39,7 @@ class DownloadRequest(BaseModel):
     staff_ids: List[str]
     dates: List[Any]
     schedule: List[List[str]]
+    original_schedule: Optional[List[List[str]]] = None
     day_leaders: Optional[List[Optional[str]]] = None
 
 
@@ -139,6 +140,7 @@ async def download_excel(request: DownloadRequest):
             staff_ids=request.staff_ids,
             dates=request.dates,
             schedule=request.schedule,
+            original_schedule=request.original_schedule,
             day_leaders=request.day_leaders,
         )
     except Exception as e:
