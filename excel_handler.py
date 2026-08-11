@@ -84,6 +84,11 @@ def read_excel(file_bytes: bytes) -> Dict[str, Any]:
     for row_idx in range(header_row + 1, ws.max_row + 1):
         staff_id = ws.cell(row_idx, 1).value
         if staff_id is None or str(staff_id).strip() == "":
+            # 職員リストの終端（空行）以降には凡例・日別集計などが並ぶため、
+            # 職員を1人以上読み込んだ後の空行で打ち切る。
+            # 最初の職員が現れる前の空行・曜日行は従来どおり読み飛ばす。
+            if staff_ids:
+                break
             continue
 
         staff_ids.append(str(staff_id).strip())
@@ -108,9 +113,13 @@ def write_excel(
     staff_ids: List[str],
     dates: List,
     schedule: List[List[str]],
+    day_leaders: List = None,
 ) -> bytes:
     """
     勤務表データからエクセルファイルを生成してバイト列で返す
+
+    day_leaders: 日ごとの日勤リーダーの staff_id リスト（None 可）。
+    リーダーのセルは背景色（薄い黄色）のみ付け、文字は一切変更しない。
     """
     wb = Workbook()
     ws = wb.active
@@ -174,6 +183,18 @@ def write_excel(
                     size=10,
                     color=colors["fg"],
                     bold=(shift == "夜"),
+                )
+
+            # 日勤リーダーのセルは背景色（薄い黄色）のみ付ける（文字は変更しない）
+            if (
+                day_leaders
+                and col_idx < len(day_leaders)
+                and day_leaders[col_idx] == staff_id
+            ):
+                cell.fill = PatternFill(
+                    start_color="FFF2CC",
+                    end_color="FFF2CC",
+                    fill_type="solid",
                 )
 
     # フリーズペイン（1行目とA列を固定）

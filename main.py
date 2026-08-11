@@ -4,7 +4,7 @@
 
 import calendar
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -30,7 +30,6 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 class GenerateRequest(BaseModel):
     staff_ids: List[str]
     staff_floors: List[int] = []
-    staff_sections: List[str] = []
     dates: List[Any]
     schedule: List[List[str]]
     settings: Dict[str, Any]
@@ -40,6 +39,7 @@ class DownloadRequest(BaseModel):
     staff_ids: List[str]
     dates: List[Any]
     schedule: List[List[str]]
+    day_leaders: Optional[List[Optional[str]]] = None
 
 
 # =========================================================
@@ -91,7 +91,7 @@ async def generate(request: GenerateRequest):
     シフトを自動生成
 
     Returns:
-        { schedule, warnings }
+        { schedule, warnings, day_leaders }
     """
     # バリデーション
     required_keys = [
@@ -112,10 +112,9 @@ async def generate(request: GenerateRequest):
     try:
         year = int(request.settings["year"])
         month = int(request.settings["month"])
-        schedule, warnings = generate_shift(
+        schedule, warnings, day_leaders = generate_shift(
             staff_ids=request.staff_ids,
             staff_floors=request.staff_floors,
-            staff_sections=request.staff_sections,
             year=year,
             month=month,
             schedule=request.schedule,
@@ -127,7 +126,7 @@ async def generate(request: GenerateRequest):
             detail=f"シフト生成中にエラーが発生しました: {str(e)}",
         )
 
-    return {"schedule": schedule, "warnings": warnings}
+    return {"schedule": schedule, "warnings": warnings, "day_leaders": day_leaders}
 
 
 @app.post("/api/download")
@@ -140,6 +139,7 @@ async def download_excel(request: DownloadRequest):
             staff_ids=request.staff_ids,
             dates=request.dates,
             schedule=request.schedule,
+            day_leaders=request.day_leaders,
         )
     except Exception as e:
         raise HTTPException(

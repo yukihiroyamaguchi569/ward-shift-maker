@@ -9,6 +9,7 @@
 let uploadedData = null;   // { staff_ids, dates, schedule }
 let originalSchedule = null; // アップロード時の元データ（再作成用）
 let generatedSchedule = null; // 生成済みスケジュール
+let generatedDayLeaders = null; // 日ごとの日勤リーダー staff_id リスト
 
 // =========================================================
 // DOM要素
@@ -46,7 +47,8 @@ targetMonth.addEventListener("change", () => {
     if (uploadedData) {
         const sched = generatedSchedule || uploadedData.schedule;
         const orig = generatedSchedule ? originalSchedule : null;
-        renderTable(uploadedData.staff_ids, uploadedData.dates, sched, orig);
+        const leaders = generatedSchedule ? generatedDayLeaders : null;
+        renderTable(uploadedData.staff_ids, uploadedData.dates, sched, orig, leaders);
     }
 });
 
@@ -65,7 +67,7 @@ const DEFAULT_PRESETS = {
     }
 };
 
-// スタッフごとの階（3/4）と区分（日/7b）
+// スタッフごとの階（3/4）
 let staffMeta = {};
 
 const presetSelect = document.getElementById("presetSelect");
@@ -257,6 +259,7 @@ async function handleFileUpload(file) {
         uploadedData = await res.json();
         originalSchedule = uploadedData.schedule.map(row => [...row]);
         generatedSchedule = null;
+        generatedDayLeaders = null;
         staffMeta = {};
 
         // ファイル情報表示
@@ -295,7 +298,6 @@ async function generateShift() {
         showLoading(true);
 
         const staff_floors = uploadedData.staff_ids.map(sid => (staffMeta[sid] && staffMeta[sid].floor) || 3);
-        const staff_sections = uploadedData.staff_ids.map(sid => (staffMeta[sid] && staffMeta[sid].section) || "日");
 
         const res = await fetch("/api/generate", {
             method: "POST",
@@ -303,7 +305,6 @@ async function generateShift() {
             body: JSON.stringify({
                 staff_ids: uploadedData.staff_ids,
                 staff_floors: staff_floors,
-                staff_sections: staff_sections,
                 dates: uploadedData.dates,
                 schedule: originalSchedule.map(row => [...row]),
                 settings: settings,
@@ -317,6 +318,7 @@ async function generateShift() {
 
         const result = await res.json();
         generatedSchedule = result.schedule;
+        generatedDayLeaders = result.day_leaders || null;
 
         // ボタン有効化・ラベルを「再作成」に変更
         generateBtn.textContent = "再作成";
@@ -327,7 +329,8 @@ async function generateShift() {
             uploadedData.staff_ids,
             uploadedData.dates,
             generatedSchedule,
-            originalSchedule
+            originalSchedule,
+            generatedDayLeaders
         );
 
         // 警告表示
@@ -361,6 +364,7 @@ downloadBtn.addEventListener("click", async () => {
                 staff_ids: uploadedData.staff_ids,
                 dates: uploadedData.dates,
                 schedule: generatedSchedule,
+                day_leaders: generatedDayLeaders,
             }),
         });
 
@@ -414,14 +418,14 @@ function getDaysOffTarget() {
 // テーブル描画
 // =========================================================
 
-function renderTable(staffIds, dates, schedule, original = null) {
+function renderTable(staffIds, dates, schedule, original = null, dayLeaders = null) {
     const settings = getSettings();
     const daysOffTarget = getDaysOffTarget();
     let html = "";
 
     // ヘッダー行
     html += "<thead><tr>";
-    html += "<th>職員番号</th><th>階</th><th>区分</th>";
+    html += "<th>職員番号</th><th>階</th>";
     for (const date of dates) {
         const dayClass = getDayClass(date);
         html += `<th class="${dayClass}">${date}</th>`;
@@ -435,7 +439,7 @@ function renderTable(staffIds, dates, schedule, original = null) {
     html += "<tbody>";
     for (let i = 0; i < staffIds.length; i++) {
         const sid = staffIds[i];
-        const meta = staffMeta[sid] || { floor: 3, section: "日" };
+        const meta = staffMeta[sid] || { floor: 3 };
 
         let rowClass = "";
         if (i < settings.night_leader_count) {
@@ -454,13 +458,6 @@ function renderTable(staffIds, dates, schedule, original = null) {
                 <option value="4"${meta.floor === 4 ? " selected" : ""}>4階</option>
             </select>
         </td>`;
-        // 区分セレクタ
-        html += `<td>
-            <select class="section-select text-xs border rounded px-1" data-staff-id="${sid}">
-                <option value="日"${meta.section === "日" ? " selected" : ""}>日</option>
-                <option value="7b"${meta.section === "7b" ? " selected" : ""}>7b</option>
-            </select>
-        </td>`;
 
         let nightCount = 0;
         let dayCount = 0;
@@ -471,7 +468,8 @@ function renderTable(staffIds, dates, schedule, original = null) {
             const isFixed = original ? (original[i][j] && original[i][j].trim() !== "") : false;
             const cellClass = getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
-            html += `<td class="${cellClass}${fixedClass}">${shift}</td>`;
+            const leaderClass = dayLeaders && dayLeaders[j] === sid ? " shift-day-leader" : "";
+            html += `<td class="${cellClass}${fixedClass}${leaderClass}">${shift}</td>`;
 
             if (["夜", "★", "☆"].includes(shift)) nightCount++;
             if (["日", "7b"].includes(shift)) dayCount++;
@@ -488,7 +486,7 @@ function renderTable(staffIds, dates, schedule, original = null) {
 
     // 日別統計行（日勤計 = 日 + 7b の合算）
     html += '<tr class="font-semibold bg-gray-50">';
-    html += "<td colspan=\"3\">日勤計</td>";
+    html += "<td colspan=\"2\">日勤計</td>";
     for (let j = 0; j < dates.length; j++) {
         const dow = getDow(dates[j]);
         const required = dow === 0 ? 9 : 5; // 日曜=9人(3階5+4階4), 平日/土=5人(日4+7b1)
@@ -507,7 +505,7 @@ function renderTable(staffIds, dates, schedule, original = null) {
     html += "</tr>";
 
     html += '<tr class="font-semibold bg-gray-50">';
-    html += "<td colspan=\"3\">夜勤計</td>";
+    html += "<td colspan=\"2\">夜勤計</td>";
     for (let j = 0; j < dates.length; j++) {
         let nightTotal = 0;
         for (let i = 0; i < staffIds.length; i++) {
@@ -539,15 +537,8 @@ function bindStaffMetaHandlers() {
     document.querySelectorAll(".floor-select").forEach(sel => {
         sel.addEventListener("change", () => {
             const sid = sel.dataset.staffId;
-            if (!staffMeta[sid]) staffMeta[sid] = { floor: 3, section: "日" };
+            if (!staffMeta[sid]) staffMeta[sid] = { floor: 3 };
             staffMeta[sid].floor = parseInt(sel.value);
-        });
-    });
-    document.querySelectorAll(".section-select").forEach(sel => {
-        sel.addEventListener("change", () => {
-            const sid = sel.dataset.staffId;
-            if (!staffMeta[sid]) staffMeta[sid] = { floor: 3, section: "日" };
-            staffMeta[sid].section = sel.value;
         });
     });
 }
