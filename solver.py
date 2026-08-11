@@ -579,7 +579,7 @@ def generate_shift(
         model.AddMinEquality(min_nights, [night_counts[s] for s in eligible_staff])
         night_spread = model.NewIntVar(0, max_night_shifts, "night_spread")
         model.Add(night_spread == max_nights - min_nights)
-        objective_terms.append(night_spread * 100)
+        objective_terms.append(night_spread * 1000)
 
     # 各スタッフの夜勤間隔均等化（月を3ブロックに分割してブロック間ばらつきを最小化）
     K = 3
@@ -657,7 +657,7 @@ def generate_shift(
         for s in range(night_leader_count)
         for d in range(day_count)
     )
-    objective_terms.append(leader_pair_penalty * 1000)
+    objective_terms.append(leader_pair_penalty * 200)
 
     model.Minimize(sum(objective_terms))
 
