@@ -427,9 +427,10 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
     // ヘッダー行
     html += "<thead><tr>";
     html += "<th>職員番号</th><th>階</th>";
-    for (const date of dates) {
+    for (let j = 0; j < dates.length; j++) {
+        const date = dates[j];
         const dayClass = getDayClass(date);
-        html += `<th class="${dayClass}">${date}</th>`;
+        html += `<th class="${dayClass}" data-shift-column="${j}">${date}</th>`;
     }
     html += '<th class="stats-col">夜</th>';
     html += '<th class="stats-col">日</th>';
@@ -476,7 +477,7 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
             const cellClass = isRequestedOff ? "shift-requested" : getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
             const leaderClass = dayLeaders && dayLeaders[j] === sid ? " shift-day-leader" : "";
-            html += `<td class="${cellClass}${fixedClass}${leaderClass}">${shift}</td>`;
+            html += `<td class="${cellClass}${fixedClass}${leaderClass} shift-cell" data-shift-column="${j}">${shift}</td>`;
 
             if (["夜", "★", "☆"].includes(shift)) nightCount++;
             if (["日", "7b"].includes(shift)) dayCount++;
@@ -529,6 +530,7 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
     scheduleTable.innerHTML = html;
     showPanel(tablePanel);
     bindStaffMetaHandlers();
+    bindTableHoverHandlers();
 }
 
 function getDow(dateStr) {
@@ -546,6 +548,24 @@ function bindStaffMetaHandlers() {
             const sid = sel.dataset.staffId;
             if (!staffMeta[sid]) staffMeta[sid] = { floor: 3 };
             staffMeta[sid].floor = parseInt(sel.value);
+        });
+    });
+}
+
+function bindTableHoverHandlers() {
+    scheduleTable.querySelectorAll(".shift-cell").forEach(cell => {
+        const column = cell.dataset.shiftColumn;
+        const row = cell.closest("tr");
+        const columnCells = scheduleTable.querySelectorAll(`[data-shift-column="${column}"]`);
+
+        cell.addEventListener("mouseenter", () => {
+            row.classList.add("hover-row");
+            columnCells.forEach(columnCell => columnCell.classList.add("hover-column"));
+        });
+
+        cell.addEventListener("mouseleave", () => {
+            row.classList.remove("hover-row");
+            columnCells.forEach(columnCell => columnCell.classList.remove("hover-column"));
         });
     });
 }
