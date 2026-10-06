@@ -34,3 +34,6 @@ uploads/
 
 # Logs
 *.log
+
+# Hospital master data (local only)
+reference_data/
