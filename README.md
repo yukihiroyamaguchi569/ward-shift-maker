@@ -6,6 +6,10 @@
 
 https://shift-maker-psac.onrender.com
 
+## 運用方針
+
+Cloudflareへの移行は、Cloudflare Containersの有料プランと利用料金が必要になるため、現時点では見送ります。Renderでの運用を継続します。詳細は[Cloudflare移行案](cloudflare-migration-plan.md)を参照してください。
+
 ## 機能
 
 - エクセルファイル（`.xlsx`）のアップロード・解析
