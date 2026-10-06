@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from excel_handler import read_excel, write_excel
-from solver import generate_shift
+from solver import SettingsValidationError, generate_shift
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -111,8 +111,15 @@ async def generate(request: GenerateRequest):
             )
 
     try:
-        year = int(request.settings["year"])
-        month = int(request.settings["month"])
+        try:
+            year = int(request.settings["year"])
+            month = int(request.settings["month"])
+        except (TypeError, ValueError):
+            raise SettingsValidationError("year と month は整数で指定してください。")
+        if year < 1:
+            raise SettingsValidationError("year は1以上にしてください。")
+        if not 1 <= month <= 12:
+            raise SettingsValidationError("month は1以上12以下にしてください。")
         schedule, warnings, day_leaders = generate_shift(
             staff_ids=request.staff_ids,
             staff_floors=request.staff_floors,
@@ -121,6 +128,8 @@ async def generate(request: GenerateRequest):
             schedule=request.schedule,
             settings=request.settings,
         )
+    except SettingsValidationError as e:
+        raise HTTPException(status_code=400, detail=f"設定エラー: {e}")
     except Exception as e:
         raise HTTPException(
             status_code=500,
