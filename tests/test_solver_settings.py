@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+from unittest.mock import patch
+
 from fastapi import HTTPException
 
 from main import GenerateRequest, generate
@@ -76,6 +78,29 @@ class SolverSettingsValidationTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
         self.assertIn("day_leader_count", raised.exception.detail)
+
+    def _request(self, **overrides):
+        return GenerateRequest(
+            staff_ids=["001", "002"],
+            staff_floors=[3, 3],
+            dates=list(range(1, 32)),
+            schedule=[[""] * 31, [""] * 31],
+            settings={**self.settings, "year": 2026, "month": 9, **overrides},
+        )
+
+    def test_api_returns_400_for_non_numeric_year(self):
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(generate(self._request(year="abc")))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("設定エラー", raised.exception.detail)
+
+    def test_api_returns_500_when_solver_raises_plain_value_error(self):
+        with patch("main.generate_shift", side_effect=ValueError("internal bug")):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(generate(self._request()))
+
+        self.assertEqual(raised.exception.status_code, 500)
 
 
 if __name__ == "__main__":

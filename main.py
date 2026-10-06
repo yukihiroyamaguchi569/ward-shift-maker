@@ -111,8 +111,11 @@ async def generate(request: GenerateRequest):
             )
 
     try:
-        year = int(request.settings["year"])
-        month = int(request.settings["month"])
+        try:
+            year = int(request.settings["year"])
+            month = int(request.settings["month"])
+        except (TypeError, ValueError):
+            raise SettingsValidationError("year と month は整数で指定してください。")
         if year < 1:
             raise SettingsValidationError("year は1以上にしてください。")
         if not 1 <= month <= 12:
@@ -126,8 +129,6 @@ async def generate(request: GenerateRequest):
             settings=request.settings,
         )
     except SettingsValidationError as e:
-        raise HTTPException(status_code=400, detail=f"設定エラー: {e}")
-    except (TypeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"設定エラー: {e}")
     except Exception as e:
         raise HTTPException(
