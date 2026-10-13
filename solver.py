@@ -859,7 +859,7 @@ def diagnose_infeasibility(
     """条件を満たせない箇所の一例を日本語メッセージで返す。
 
     人数確保系の制約を緩めたモデルでスラックの合計を最小化し、不足が出た
-    箇所を報告する。緩和モデルでも解けない・時間内に解が出ない場合は空リスト。
+    箇所を報告する。緩和モデルが最適解まで解けない（解なし・時間切れ含む）場合は空リスト。
     """
     staff_count = len(staff_ids)
     day_count = len(normalized[0]) if normalized else 0
@@ -880,7 +880,8 @@ def diagnose_infeasibility(
     solver.parameters.max_time_in_seconds = 10
     solver.parameters.num_search_workers = 8
     status = solver.Solve(parts.model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    # 最適解でなければ、正のスラックが本当に避けられない違反とは限らないので報告しない。
+    if status != cp_model.OPTIMAL:
         return []
 
     slacks = parts.slacks

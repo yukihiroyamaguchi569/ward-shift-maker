@@ -172,6 +172,27 @@ class NightCapacityMessageTests(unittest.TestCase):
         self.assertTrue(messages[3].startswith("3日: 夜勤（☆）が3人必要"))
 
 
+class NonOptimalDiagnosisTests(unittest.TestCase):
+    def test_feasible_but_not_optimal_relaxed_solve_returns_nothing(self):
+        class FeasibleSolver(cp_model.CpSolver):
+            def Solve(self, model, *args, **kwargs):
+                super().Solve(model, *args, **kwargs)
+                return cp_model.FEASIBLE
+
+        schedule = day_leader_blocked_schedule()
+        precheck = solver.precheck_schedule(staff_ids(), 2026, 11, schedule, SETTINGS)
+        with mock.patch.object(solver.cp_model, "CpSolver", FeasibleSolver):
+            messages = solver.diagnose_infeasibility(
+                staff_ids(),
+                2026,
+                11,
+                precheck.normalized,
+                precheck.fixed_types,
+                precheck.validated_settings,
+            )
+        self.assertEqual(messages, [])
+
+
 class FullWidthNormalizationTests(unittest.TestCase):
     def test_full_width_ascii_becomes_half_width(self):
         self.assertEqual(_normalize_cell("7ｂ"), "7b")
