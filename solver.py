@@ -125,8 +125,16 @@ SYNONYM_MARKS = {
 }
 
 
+# 全角英数字を半角にする表（NFKC は ℓ を l にするなど過剰なので使わない）。
+FULLWIDTH_TO_HALFWIDTH = {
+    **{0xFF10 + i: ord("0") + i for i in range(10)},
+    **{0xFF21 + i: ord("A") + i for i in range(26)},
+    **{0xFF41 + i: ord("a") + i for i in range(26)},
+}
+
+
 def _normalize_cell(text: str) -> str:
-    value = text.strip()
+    value = text.strip().translate(FULLWIDTH_TO_HALFWIDTH)
     if value == "":
         return BLANK
     if value in SYNONYM_MARKS:
