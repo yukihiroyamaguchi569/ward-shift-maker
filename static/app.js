@@ -10,6 +10,8 @@ let uploadedData = null;   // { staff_ids, dates, schedule }
 let originalSchedule = null; // アップロード時の元データ（再作成用）
 let generatedSchedule = null; // 生成済みスケジュール
 let generatedDayLeaders = null; // 日ごとの日勤リーダー staff_id リスト
+let precheckSeq = 0; // 作成前チェックの世代番号（古い応答を捨てるため）
+let precheckTimer = null; // 設定変更時のデバウンス用タイマー
 
 // =========================================================
 // DOM要素
@@ -50,6 +52,7 @@ targetMonth.addEventListener("change", () => {
         const leaders = generatedSchedule ? generatedDayLeaders : null;
         renderTable(uploadedData.staff_ids, uploadedData.dates, sched, orig, leaders);
     }
+    runPrecheck();
 });
 
 // =========================================================
@@ -162,6 +165,7 @@ presetSelect.addEventListener("change", () => {
     const name = presetSelect.value;
     if (name !== "__custom__") {
         applyPreset(name);
+        schedulePrecheck();
     }
 });
 
@@ -172,6 +176,7 @@ presetDeleteBtn.addEventListener("click", deletePreset);
 for (const key of SETTING_KEYS) {
     document.getElementById(key).addEventListener("input", () => {
         presetSelect.value = "__custom__";
+        schedulePrecheck();
     });
 }
 
@@ -274,12 +279,72 @@ async function handleFileUpload(file) {
 
         // テーブル表示（元データ）
         renderTable(uploadedData.staff_ids, uploadedData.dates, uploadedData.schedule);
-        hideWarnings();
+        runPrecheck();
 
     } catch (err) {
         alert(err.message);
     } finally {
         showLoading(false);
+    }
+}
+
+// =========================================================
+// 作成前チェック
+// =========================================================
+
+const PRECHECK_TIMEOUT_MS = 15000;
+const PRECHECK_DEBOUNCE_MS = 300;
+
+function schedulePrecheck() {
+    clearTimeout(precheckTimer);
+    precheckTimer = setTimeout(runPrecheck, PRECHECK_DEBOUNCE_MS);
+}
+
+async function runPrecheck() {
+    // 生成後は生成時の警告を残すため、チェックしない
+    if (!uploadedData || generatedSchedule) return;
+
+    const seq = ++precheckSeq;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PRECHECK_TIMEOUT_MS);
+
+    try {
+        const staff_floors = uploadedData.staff_ids.map(sid => (staffMeta[sid] && staffMeta[sid].floor) || 3);
+
+        const res = await fetch("/api/check", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                staff_ids: uploadedData.staff_ids,
+                staff_floors: staff_floors,
+                dates: uploadedData.dates,
+                schedule: originalSchedule.map(row => [...row]),
+                settings: getSettings(),
+            }),
+            signal: controller.signal,
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || "作成前チェックに失敗しました");
+        }
+
+        const result = await res.json();
+        if (seq !== precheckSeq || generatedSchedule) return;
+
+        const conflicts = result.conflicts || [];
+        const notices = result.notices || [];
+        if (conflicts.length > 0) {
+            showWarnings(["このままでは勤務表を作成できません。", ...conflicts, ...notices]);
+        } else if (notices.length > 0) {
+            showWarnings(notices);
+        } else {
+            hideWarnings();
+        }
+    } catch (err) {
+        console.warn("作成前チェックに失敗しました:", err);
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
