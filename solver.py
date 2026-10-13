@@ -736,6 +736,146 @@ def _build_model(
     )
 
 
+def _format_days(days: List[int]) -> str:
+    return "・".join(f"{d + 1}日" for d in days)
+
+
+def _consecutive_runs(days: List[int]) -> List[Tuple[int, int]]:
+    """昇順の日リストを連続する区間 (開始, 終了) にまとめる。"""
+    runs: List[Tuple[int, int]] = []
+    for d in days:
+        if runs and runs[-1][1] == d - 1:
+            runs[-1] = (runs[-1][0], d)
+        else:
+            runs.append((d, d))
+    return runs
+
+
+def _short_days(values: Dict, solver: cp_model.CpSolver) -> List[int]:
+    return [d for d, var in sorted(values.items()) if solver.Value(var) > 0]
+
+
+def _staff_diagnosis_messages(
+    staff_ids: List[str],
+    slacks: Dict[str, Dict],
+    solver: cp_model.CpSolver,
+    min_off_by_staff: List[int],
+    max_night_shifts: int,
+) -> List[str]:
+    messages: List[str] = []
+    for s, var in sorted(slacks.get("off", {}).items()):
+        short = solver.Value(var)
+        if short > 0:
+            messages.append(
+                f"職員{staff_ids[s]}: 公休を{min_off_by_staff[s]}日確保できません（{short}日不足）。"
+            )
+    consec_by_staff: Dict[int, List[int]] = {}
+    for (s, d), var in sorted(slacks.get("consec", {}).items()):
+        if solver.Value(var) > 0:
+            consec_by_staff.setdefault(s, []).append(d)
+    for s, starts in consec_by_staff.items():
+        for first, last in _consecutive_runs(starts):
+            messages.append(
+                f"職員{staff_ids[s]}: {first + 1}日〜{last + 6}日に6連勤以上になります。"
+            )
+    for s, var in sorted(slacks.get("night", {}).items()):
+        if solver.Value(var) > 0:
+            messages.append(
+                f"職員{staff_ids[s]}: 夜勤上限（{max_night_shifts}回）を超えます。"
+            )
+    return messages
+
+
+def diagnose_infeasibility(
+    staff_ids: List[str],
+    year: int,
+    month: int,
+    normalized: List[List[str]],
+    fixed_types: List[List[str]],
+    validated_settings: Dict,
+) -> List[str]:
+    """条件を満たせない箇所の一例を日本語メッセージで返す。
+
+    人数確保系の制約を緩めたモデルでスラックの合計を最小化し、不足が出た
+    箇所を報告する。緩和モデルでも解けない・時間内に解が出ない場合は空リスト。
+    """
+    staff_count = len(staff_ids)
+    day_count = len(normalized[0]) if normalized else 0
+    parts = _build_model(
+        staff_count,
+        day_count,
+        year,
+        month,
+        normalized,
+        fixed_types,
+        validated_settings,
+        relax=True,
+    )
+    all_slacks = [v for group in parts.slacks.values() for v in group.values()]
+    parts.model.Minimize(sum(all_slacks))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 10
+    solver.parameters.num_search_workers = 8
+    status = solver.Solve(parts.model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return []
+
+    slacks = parts.slacks
+    leader_count = validated_settings["night_leader_count"]
+    day_leader_count = validated_settings["day_leader_count"]
+    day_required_count = validated_settings["day_required_count"]
+    off_target = validated_settings["days_off_count"]
+    messages: List[str] = []
+
+    days = _short_days(slacks.get("star", {}), solver)
+    if days:
+        messages.append(
+            f"{_format_days(days)}: 夜勤リーダー（★）を置けません。"
+            f"夜勤リーダー候補（上から{leader_count}人）の休み・予定を見直してください。"
+        )
+    days = _short_days(slacks.get("pair", {}), solver)
+    if days:
+        messages.append(
+            f"{_format_days(days)}: 夜勤（☆）を置けません。"
+            "夜勤可能な職員の休み・予定を見直してください。"
+        )
+    days = _short_days(slacks.get("day_leader", {}), solver)
+    if days:
+        messages.append(
+            f"{_format_days(days)}: 日勤リーダーを置けません。"
+            f"日勤リーダー候補（上から{day_leader_count}人）の誰も日勤に入れません。"
+            "候補の休み・予定を見直してください。"
+        )
+    short_by_amount: Dict[int, List[int]] = {}
+    for d, var in sorted(slacks.get("day", {}).items()):
+        if solver.Value(var) > 0:
+            short_by_amount.setdefault(solver.Value(var), []).append(d)
+    for amount, amount_days in sorted(short_by_amount.items()):
+        messages.append(
+            f"{_format_days(amount_days)}: 日勤が{amount}人不足します"
+            f"（必要 {day_required_count}人）。"
+        )
+    days = _short_days(slacks.get("7b", {}), solver)
+    if days:
+        messages.append(f"{_format_days(days)}: 7bを置けません。")
+
+    min_off_by_staff = [
+        max(off_target, sum(1 for t in fixed_types[s] if t == "off"))
+        for s in range(staff_count)
+    ]
+    messages.extend(
+        _staff_diagnosis_messages(
+            staff_ids,
+            slacks,
+            solver,
+            min_off_by_staff,
+            validated_settings["max_night_shifts"],
+        )
+    )
+    return messages
+
+
 def generate_shift(
     staff_ids: List[str],
     staff_floors: List[int],
@@ -905,6 +1045,14 @@ def generate_shift(
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         warnings.append("条件を満たす勤務表が見つかりませんでした。設定または固定希望を確認してください。")
+        diagnosis = diagnose_infeasibility(
+            staff_ids, year, month, normalized, fixed_types, validated_settings
+        )
+        if diagnosis:
+            warnings.extend(diagnosis)
+            warnings.append(
+                "（上記は条件を満たせない箇所の一例です。いずれかを見直すと作成できる可能性があります。）"
+            )
         total_capacity = night_eligible_count * max_night_shifts
         required_nights = day_count * 2
         if total_capacity < required_nights:
