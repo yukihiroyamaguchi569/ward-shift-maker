@@ -13,7 +13,7 @@ night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットに
 """
 
 import calendar
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -156,15 +156,24 @@ def _classify(text: str) -> str:
     return "fixed_other"
 
 
-def generate_shift(
+class PrecheckResult(NamedTuple):
+    validated_settings: Dict
+    day_count: int
+    normalized: List[List[str]]
+    fixed_types: List[List[str]]
+    pre_completion_normalized: List[List[str]]
+    warnings: List[str]
+    conflict_warnings: List[str]
+
+
+def precheck_schedule(
     staff_ids: List[str],
-    staff_floors: List[int],
     year: int,
     month: int,
     schedule: List[List[str]],
     settings: Dict,
-) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
-    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
+) -> PrecheckResult:
+    """設定の検証と固定入力の事前バリデーションを行う（ソルバーは実行しない）。"""
 
     staff_count = len(staff_ids)
     day_count = calendar.monthrange(year, month)[1]
@@ -179,11 +188,8 @@ def generate_shift(
     night_leader_count = validated_settings["night_leader_count"]
     night_eligible_count = validated_settings["night_eligible_count"]
     max_night_shifts = validated_settings["max_night_shifts"]
-    day_leader_count = validated_settings["day_leader_count"]
     day_required_count = validated_settings["day_required_count"]
     off_target = validated_settings["days_off_count"]
-
-    empty_day_leaders: List[Optional[str]] = [None] * day_count
 
     normalized = []
     for row in schedule:
@@ -209,6 +215,16 @@ def generate_shift(
         return f"職員{staff_ids[s]}: {d + 1}日 {message}"
 
     conflict_warnings: List[str] = []
+
+    # アップロードされたファイルの日数と対象月の日数が一致しない場合は、
+    # 月の指定違いの可能性が高いため最優先で知らせる。
+    row_lengths = {len(row) for row in schedule}
+    if row_lengths and row_lengths != {day_count}:
+        file_days = max(row_lengths)
+        conflict_warnings.append(
+            f"ファイルの日数（{file_days}日）と対象月（{year}年{month}月: {day_count}日）の日数が一致しません。"
+            "対象月を確認してください。"
+        )
 
     # 通常の夜勤候補外に固定★/☆がある場合は、例外勤務として採用する。
     # 空欄セルに対する自動配置は、下の制約で従来どおり候補内に限定する。
@@ -412,6 +428,47 @@ def generate_shift(
             f"（{staff_count}人、各 {day_count}日 − 休み（最低{off_target}日、固定休が多い場合はその日数））に対し、"
             f"夜勤・明け・日勤で最低 {required_work_cells} コマ必要です。"
         )
+
+
+    return PrecheckResult(
+        validated_settings=validated_settings,
+        day_count=day_count,
+        normalized=normalized,
+        fixed_types=fixed_types,
+        pre_completion_normalized=pre_completion_normalized,
+        warnings=warnings,
+        conflict_warnings=conflict_warnings,
+    )
+
+
+def generate_shift(
+    staff_ids: List[str],
+    staff_floors: List[int],
+    year: int,
+    month: int,
+    schedule: List[List[str]],
+    settings: Dict,
+) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
+    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
+
+    staff_count = len(staff_ids)
+    precheck = precheck_schedule(staff_ids, year, month, schedule, settings)
+    validated_settings = precheck.validated_settings
+    day_count = precheck.day_count
+    normalized = precheck.normalized
+    fixed_types = precheck.fixed_types
+    pre_completion_normalized = precheck.pre_completion_normalized
+    warnings = precheck.warnings
+    conflict_warnings = precheck.conflict_warnings
+    night_leader_count = validated_settings["night_leader_count"]
+    night_eligible_count = validated_settings["night_eligible_count"]
+    max_night_shifts = validated_settings["max_night_shifts"]
+    day_leader_count = validated_settings["day_leader_count"]
+    day_required_count = validated_settings["day_required_count"]
+    off_target = validated_settings["days_off_count"]
+
+    empty_day_leaders: List[Optional[str]] = [None] * day_count
+
 
     if conflict_warnings:
         return pre_completion_normalized, conflict_warnings, list(empty_day_leaders)
