@@ -13,6 +13,7 @@ night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットに
 """
 
 import calendar
+import logging
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ortools.sat.python import cp_model
@@ -30,6 +31,9 @@ LEADER_MARKS = {LEADER_NIGHT}
 PAIR_MARKS = {PAIR_NIGHT, "夜"}  # 既存データ互換
 AFTER_MARKS = {AFTER, "～", "～⋆", "〜", "〜⋆"}
 DAY_MARKS = {DAY_SHIFT, DAY_SHIFT_7B}
+
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsValidationError(ValueError):
@@ -1053,9 +1057,17 @@ def generate_shift(
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         warnings.append("条件を満たす勤務表が見つかりませんでした。設定または固定希望を確認してください。")
-        diagnosis = diagnose_infeasibility(
-            staff_ids, year, month, normalized, fixed_types, validated_settings
-        )
+        diagnosis: List[str] = []
+        # 時間切れ（UNKNOWN）では「満たせない」と断定できないので、診断は INFEASIBLE のときだけ。
+        # 診断は補助情報なので、失敗しても本体の結果は返す。
+        if status == cp_model.INFEASIBLE:
+            try:
+                diagnosis = diagnose_infeasibility(
+                    staff_ids, year, month, normalized, fixed_types, validated_settings
+                )
+            except Exception:
+                logger.exception("作成不可の診断に失敗しました")
+                diagnosis = []
         if diagnosis:
             warnings.extend(diagnosis)
             warnings.append(

@@ -1,6 +1,8 @@
 import unittest
 from unittest import mock
 
+from ortools.sat.python import cp_model
+
 import solver
 from solver import _classify, _normalize_cell, generate_shift
 
@@ -91,6 +93,38 @@ class DiagnosisTests(unittest.TestCase):
             _, warnings, _ = run(day_leader_blocked_schedule())
         self.assertEqual(warnings[0], FIRST_LINE)
         self.assertNotIn(LAST_LINE, warnings)
+
+    def test_timeout_does_not_run_diagnosis(self):
+        class UnknownSolver(cp_model.CpSolver):
+            def Solve(self, model, *args, **kwargs):
+                return cp_model.UNKNOWN
+
+        with mock.patch.object(solver.cp_model, "CpSolver", UnknownSolver), \
+                mock.patch.object(solver, "diagnose_infeasibility") as diagnose:
+            _, warnings, _ = run(blank_schedule())
+        diagnose.assert_not_called()
+        self.assertEqual(warnings[0], FIRST_LINE)
+        self.assertNotIn(LAST_LINE, warnings)
+
+    def test_diagnosis_failure_keeps_main_result(self):
+        real_build = solver._build_model
+
+        def failing_when_relaxed(*args, **kwargs):
+            if kwargs.get("relax") or (len(args) > 7 and args[7]):
+                raise RuntimeError("diagnosis broke")
+            return real_build(*args, **kwargs)
+
+        schedule = day_leader_blocked_schedule()
+        with mock.patch.object(solver, "_build_model", failing_when_relaxed), \
+                self.assertLogs(solver.logger, level="ERROR"):
+            result, warnings, _ = run(schedule)
+        self.assertEqual(warnings[0], FIRST_LINE)
+        self.assertNotIn(LAST_LINE, warnings)
+        # 返すのは補完前の正規化済み勤務表（休→公）で、解の結果は含まない
+        expected = solver.precheck_schedule(
+            staff_ids(), 2026, 11, schedule, SETTINGS
+        ).pre_completion_normalized
+        self.assertEqual(result, expected)
 
 
 class FullWidthNormalizationTests(unittest.TestCase):
