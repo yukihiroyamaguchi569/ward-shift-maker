@@ -608,14 +608,20 @@ def _build_model(
                 model.Add(is_leader[s, d] == 0)
 
     # 毎日 1 人の ★ と 1 人の ☆ を配置。
+    # 診断時は、固定の明け・夜勤が強制する夜勤が1日1人を超える場合も表せるよう、
+    # 不足（short）に加えて超過（over）のスラックを持たせる。
     for d in range(day_count):
         model.Add(
             sum(is_leader[s, d] for s in range(staff_count))
             + slack("star", d, 1)
+            - slack("star_over", d, staff_count)
             == 1
         )
         model.Add(
-            sum(is_pair[s, d] for s in range(staff_count)) + slack("pair", d, 1) == 1
+            sum(is_pair[s, d] for s in range(staff_count))
+            + slack("pair", d, 1)
+            - slack("pair_over", d, staff_count)
+            == 1
         )
 
     # 日勤配置: 毎日（日曜含む）日勤を day_required_count 人以上確保する。
@@ -866,6 +872,16 @@ def diagnose_infeasibility(
             f"{_format_days(days)}: 夜勤（☆）を置けません。"
             "夜勤可能な職員の休み・予定を見直してください。"
         )
+    for kind, label in (("star_over", "夜勤リーダー（★）"), ("pair_over", "夜勤（☆）")):
+        over_by_amount: Dict[int, List[int]] = {}
+        for d, var in sorted(slacks.get(kind, {}).items()):
+            if solver.Value(var) > 0:
+                over_by_amount.setdefault(solver.Value(var), []).append(d)
+        for over, over_days in sorted(over_by_amount.items()):
+            messages.append(
+                f"{_format_days(over_days)}: {label}が{1 + over}人必要になり、"
+                "1日1人を超えます。固定の明け・夜勤の入力を見直してください。"
+            )
     days = _short_days(slacks.get("day_leader", {}), solver)
     if days:
         messages.append(

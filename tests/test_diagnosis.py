@@ -126,6 +126,37 @@ class DiagnosisTests(unittest.TestCase):
         ).pre_completion_normalized
         self.assertEqual(result, expected)
 
+    def test_reports_over_capacity_from_fixed_nights_and_after(self):
+        # 9日に固定の★と☆があり、10日に別の職員の固定の明 → 9日の夜勤が3人必要になる
+        schedule = blank_schedule()
+        schedule[0][8] = "★"
+        schedule[1][8] = "☆"
+        schedule[2][9] = "明"
+        _, warnings, _ = run(schedule)
+        self.assertEqual(warnings[0], FIRST_LINE)
+        self.assertTrue(
+            any(
+                w.startswith("9日: ") and "が2人必要になり、1日1人を超えます" in w
+                for w in warnings[1:]
+            ),
+            warnings,
+        )
+
+    def test_reports_over_capacity_when_afters_are_outside_star_group(self):
+        # ★可能は上から8人。範囲外の2人の固定の明 → 9日が☆2人になる
+        schedule = blank_schedule()
+        schedule[10][9] = "明"
+        schedule[11][9] = "明"
+        _, warnings, _ = run(schedule)
+        self.assertEqual(warnings[0], FIRST_LINE)
+        self.assertTrue(
+            any(
+                w.startswith("9日: 夜勤（☆）が2人必要になり、1日1人を超えます")
+                for w in warnings[1:]
+            ),
+            warnings,
+        )
+
 
 class FullWidthNormalizationTests(unittest.TestCase):
     def test_full_width_ascii_becomes_half_width(self):
