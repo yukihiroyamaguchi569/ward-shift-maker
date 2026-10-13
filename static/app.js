@@ -279,6 +279,8 @@ async function handleFileUpload(file) {
 
         // テーブル表示（元データ）
         renderTable(uploadedData.staff_ids, uploadedData.dates, uploadedData.schedule);
+        // 前のファイルの警告を残さない
+        hideWarnings();
         runPrecheck();
 
     } catch (err) {
