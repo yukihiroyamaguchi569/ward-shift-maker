@@ -391,6 +391,20 @@ def precheck_schedule(
                 "固定入力または夜勤可能人数を見直してください。"
             )
 
+    # 月途中の固定「明」は前日の夜勤を強制する。夜勤は1日に★1人＋☆1人の2人までなので、
+    # 3人以上の固定「明」は入力の矛盾。
+    for d in range(1, day_count):
+        after_staff = [
+            f"職員{staff_ids[s]}"
+            for s in range(staff_count)
+            if fixed_types[s][d] == "after"
+        ]
+        if len(after_staff) > 2:
+            conflict_warnings.append(
+                f"{d + 1}日: 固定の明けが{len(after_staff)}人（{'、'.join(after_staff)}）"
+                f"入力されていますが、前日（{d}日）の夜勤は★1人＋☆1人の2人までです。"
+            )
+
     # 日勤・夜勤を担える人数が足りない日がないか、単純な人数勘定で確認する。
     # （固定の休み・明けなどで埋まっているスタッフは日勤にも夜勤にも入れない）
     for d in range(day_count):

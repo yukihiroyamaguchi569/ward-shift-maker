@@ -45,6 +45,33 @@ class PrecheckScheduleTests(unittest.TestCase):
             result.conflict_warnings,
         )
 
+    def test_reports_three_fixed_afters_on_one_day(self):
+        schedule = blank_schedule(19, 30)
+        for s in range(3):
+            schedule[s][9] = "明"
+        message = (
+            "10日: 固定の明けが3人（職員1、職員2、職員3）入力されていますが、"
+            "前日（9日）の夜勤は★1人＋☆1人の2人までです。"
+        )
+        result = precheck_schedule(staff_ids(19), 2026, 11, schedule, SETTINGS)
+        self.assertIn(message, result.conflict_warnings)
+        _, warnings, _ = generate_shift(
+            staff_ids(19), [3] * 19, 2026, 11, schedule, SETTINGS
+        )
+        self.assertIn(message, warnings)
+
+    def test_allows_two_fixed_afters_and_month_start_afters(self):
+        schedule = blank_schedule(19, 30)
+        for s in range(2):
+            schedule[s][9] = "明"
+        for s in range(3):
+            schedule[s + 3][0] = "明"  # 月初は前月からの持ち越しなので対象外
+        result = precheck_schedule(staff_ids(19), 2026, 11, schedule, SETTINGS)
+        self.assertFalse(
+            any("固定の明け" in w for w in result.conflict_warnings),
+            result.conflict_warnings,
+        )
+
     def test_reports_day_count_mismatch_first(self):
         result = precheck_schedule(
             staff_ids(19), 2026, 10, blank_schedule(19, 30), SETTINGS
