@@ -818,6 +818,36 @@ def _staff_diagnosis_messages(
     return messages
 
 
+def _night_capacity_messages(
+    star_counts: List[int], pair_counts: List[int], leader_count: int
+) -> List[str]:
+    """日ごとの★/☆の配置人数から、不足と1日1人超過のメッセージを作る。"""
+    messages: List[str] = []
+    short_star = [d for d, n in enumerate(star_counts) if n < 1]
+    if short_star:
+        messages.append(
+            f"{_format_days(short_star)}: 夜勤リーダー（★）を置けません。"
+            f"夜勤リーダー候補（上から{leader_count}人）の休み・予定を見直してください。"
+        )
+    short_pair = [d for d, n in enumerate(pair_counts) if n < 1]
+    if short_pair:
+        messages.append(
+            f"{_format_days(short_pair)}: 夜勤（☆）を置けません。"
+            "夜勤可能な職員の休み・予定を見直してください。"
+        )
+    for counts, label in ((star_counts, "夜勤リーダー（★）"), (pair_counts, "夜勤（☆）")):
+        days_by_count: Dict[int, List[int]] = {}
+        for d, n in enumerate(counts):
+            if n > 1:
+                days_by_count.setdefault(n, []).append(d)
+        for n, over_days in sorted(days_by_count.items()):
+            messages.append(
+                f"{_format_days(over_days)}: {label}が{n}人必要になり、"
+                "1日1人を超えます。固定の明け・夜勤の入力を見直してください。"
+            )
+    return messages
+
+
 def diagnose_infeasibility(
     staff_ids: List[str],
     year: int,
@@ -860,28 +890,17 @@ def diagnose_infeasibility(
     off_target = validated_settings["days_off_count"]
     messages: List[str] = []
 
-    days = _short_days(slacks.get("star", {}), solver)
-    if days:
-        messages.append(
-            f"{_format_days(days)}: 夜勤リーダー（★）を置けません。"
-            f"夜勤リーダー候補（上から{leader_count}人）の休み・予定を見直してください。"
-        )
-    days = _short_days(slacks.get("pair", {}), solver)
-    if days:
-        messages.append(
-            f"{_format_days(days)}: 夜勤（☆）を置けません。"
-            "夜勤可能な職員の休み・予定を見直してください。"
-        )
-    for kind, label in (("star_over", "夜勤リーダー（★）"), ("pair_over", "夜勤（☆）")):
-        over_by_amount: Dict[int, List[int]] = {}
-        for d, var in sorted(slacks.get(kind, {}).items()):
-            if solver.Value(var) > 0:
-                over_by_amount.setdefault(solver.Value(var), []).append(d)
-        for over, over_days in sorted(over_by_amount.items()):
-            messages.append(
-                f"{_format_days(over_days)}: {label}が{1 + over}人必要になり、"
-                "1日1人を超えます。固定の明け・夜勤の入力を見直してください。"
-            )
+    # ★/☆ はスラックの値ではなく実際の配置人数から過不足を判断する
+    # （時間切れの解では short と over が同じ日に同時に正になり得るため）。
+    star_counts = [
+        sum(solver.Value(parts.is_leader[s, d]) for s in range(staff_count))
+        for d in range(day_count)
+    ]
+    pair_counts = [
+        sum(solver.Value(parts.is_pair[s, d]) for s in range(staff_count))
+        for d in range(day_count)
+    ]
+    messages.extend(_night_capacity_messages(star_counts, pair_counts, leader_count))
     days = _short_days(slacks.get("day_leader", {}), solver)
     if days:
         messages.append(

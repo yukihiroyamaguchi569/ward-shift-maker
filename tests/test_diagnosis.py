@@ -158,6 +158,20 @@ class DiagnosisTests(unittest.TestCase):
         )
 
 
+class NightCapacityMessageTests(unittest.TestCase):
+    def test_uses_assigned_counts_not_slacks(self):
+        # 実際の配置が1人なら、スラック(short=1,over=1)が立っていても何も報告しない
+        self.assertEqual(solver._night_capacity_messages([1, 1], [1, 1], 7), [])
+
+    def test_reports_shortage_and_excess_from_counts(self):
+        messages = solver._night_capacity_messages([0, 2, 1], [1, 0, 3], 7)
+        self.assertEqual(len(messages), 4)
+        self.assertTrue(messages[0].startswith("1日: 夜勤リーダー（★）を置けません"))
+        self.assertTrue(messages[1].startswith("2日: 夜勤（☆）を置けません"))
+        self.assertTrue(messages[2].startswith("2日: 夜勤リーダー（★）が2人必要"))
+        self.assertTrue(messages[3].startswith("3日: 夜勤（☆）が3人必要"))
+
+
 class FullWidthNormalizationTests(unittest.TestCase):
     def test_full_width_ascii_becomes_half_width(self):
         self.assertEqual(_normalize_cell("7ｂ"), "7b")
