@@ -441,25 +441,35 @@ def precheck_schedule(
     )
 
 
-def generate_shift(
-    staff_ids: List[str],
-    staff_floors: List[int],
+class ModelParts(NamedTuple):
+    model: cp_model.CpModel
+    is_off: Dict
+    is_after: Dict
+    is_leader: Dict
+    is_pair: Dict
+    is_day: Dict
+    is_7b: Dict
+    is_day_leader: Dict
+    extra_off_vars: List
+    night_counts: List
+    slacks: Dict[str, Dict]
+
+
+def _build_model(
+    staff_count: int,
+    day_count: int,
     year: int,
     month: int,
-    schedule: List[List[str]],
-    settings: Dict,
-) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
-    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
+    normalized: List[List[str]],
+    fixed_types: List[List[str]],
+    validated_settings: Dict,
+    relax: bool = False,
+) -> ModelParts:
+    """変数とハード制約を組み立てる（目的関数は含まない）。
 
-    staff_count = len(staff_ids)
-    precheck = precheck_schedule(staff_ids, year, month, schedule, settings)
-    validated_settings = precheck.validated_settings
-    day_count = precheck.day_count
-    normalized = precheck.normalized
-    fixed_types = precheck.fixed_types
-    pre_completion_normalized = precheck.pre_completion_normalized
-    warnings = precheck.warnings
-    conflict_warnings = precheck.conflict_warnings
+    relax=True のときは、人数確保系の制約（★/☆/日勤人数/日勤リーダー/7b/公休下限/
+    連勤/夜勤上限）にだけ非負のスラックを足し、不足の原因を診断できるようにする。
+    """
     night_leader_count = validated_settings["night_leader_count"]
     night_eligible_count = validated_settings["night_eligible_count"]
     max_night_shifts = validated_settings["max_night_shifts"]
@@ -467,33 +477,17 @@ def generate_shift(
     day_required_count = validated_settings["day_required_count"]
     off_target = validated_settings["days_off_count"]
 
-    empty_day_leaders: List[Optional[str]] = [None] * day_count
-
-
-    if conflict_warnings:
-        return pre_completion_normalized, conflict_warnings, list(empty_day_leaders)
-
-    # 固定夜勤がある場合は、空欄にだけ「明」「公」を補完する。
-    for s in range(staff_count):
-        for d in range(day_count):
-            if fixed_types[s][d] not in {"leader_night", "pair_night"}:
-                continue
-            if d + 1 < day_count and fixed_types[s][d + 1] == "blank":
-                fixed_types[s][d + 1] = "after"
-                normalized[s][d + 1] = AFTER
-            if d + 2 < day_count and fixed_types[s][d + 2] == "blank":
-                fixed_types[s][d + 2] = "off"
-                normalized[s][d + 2] = HOLIDAY
-
-    # 月初の固定「明」（前月末の夜勤セットの持ち越し）は、2日目が空欄なら「公」を補完する。
-    for s in range(staff_count):
-        if fixed_types[s][0] != "after":
-            continue
-        if day_count > 1 and fixed_types[s][1] == "blank":
-            fixed_types[s][1] = "off"
-            normalized[s][1] = HOLIDAY
-
     model = cp_model.CpModel()
+    # 診断用（relax=True）: 人数確保系の制約にだけ非負のスラックを足す。
+    # 通常時は定数 0 を返すので、制約は従来と同じ。
+    slacks: Dict[str, Dict] = {}
+
+    def slack(kind: str, key, upper: int):
+        if not relax:
+            return 0
+        var = model.NewIntVar(0, upper, f"short_{kind}_{key}")
+        slacks.setdefault(kind, {})[key] = var
+        return var
 
     is_blank = {
         (s, d): model.NewBoolVar(f"blank_{s}_{d}")
@@ -589,8 +583,14 @@ def generate_shift(
 
     # 毎日 1 人の ★ と 1 人の ☆ を配置。
     for d in range(day_count):
-        model.Add(sum(is_leader[s, d] for s in range(staff_count)) == 1)
-        model.Add(sum(is_pair[s, d] for s in range(staff_count)) == 1)
+        model.Add(
+            sum(is_leader[s, d] for s in range(staff_count))
+            + slack("star", d, 1)
+            == 1
+        )
+        model.Add(
+            sum(is_pair[s, d] for s in range(staff_count)) + slack("pair", d, 1) == 1
+        )
 
     # 日勤配置: 毎日（日曜含む）日勤を day_required_count 人以上確保する。
     # 委/研など日勤扱いの固定セル（fixed_other）は、フロントの日勤計の集計に合わせて
@@ -600,14 +600,20 @@ def generate_shift(
             1 for s in range(staff_count) if fixed_types[s][d] == "fixed_other"
         )
         model.Add(
-            sum(is_day[s, d] for s in range(staff_count)) + fixed_other_count
+            sum(is_day[s, d] for s in range(staff_count))
+            + fixed_other_count
+            + slack("day", d, day_required_count)
             >= day_required_count
         )
 
     # 日勤リーダー: 毎日1人。リーダーは実際の日勤（is_day、固定の日/7b 含む）で
     # あること。fixed_other はリーダーには数えない。
     for d in range(day_count):
-        model.Add(sum(is_day_leader[s, d] for s in range(day_leader_count)) == 1)
+        model.Add(
+            sum(is_day_leader[s, d] for s in range(day_leader_count))
+            + slack("day_leader", d, 1)
+            == 1
+        )
     for s in range(day_leader_count):
         for d in range(day_count):
             model.Add(is_day_leader[s, d] <= is_day[s, d])
@@ -628,7 +634,9 @@ def generate_shift(
     for d in range(day_count):
         if calendar.weekday(year, month, d + 1) == 6:  # 日曜
             continue
-        model.Add(sum(is_7b[s, d] for s in range(staff_count)) == 1)
+        model.Add(
+            sum(is_7b[s, d] for s in range(staff_count)) + slack("7b", d, 1) == 1
+        )
 
     # 公休日数: 目標（off_target）は最低限。各スタッフの休み（固定の公・希・有＋
     # ソルバー配置の公）の合計を max(目標, 固定 off 数) 以上にする（下限のみ）。
@@ -644,9 +652,10 @@ def generate_shift(
         min_off = max(off_target, fixed_off_count)
         min_off_by_staff.append(min_off)
         off_sum = sum(is_off[s, d] for d in range(day_count))
-        model.Add(off_sum >= min_off)
+        short_off = slack("off", s, min_off)
+        model.Add(off_sum + short_off >= min_off)
         extra_off = model.NewIntVar(0, day_count, f"extra_off_{s}")
-        model.Add(extra_off == off_sum - min_off)
+        model.Add(extra_off == off_sum + short_off - min_off)
         extra_off_vars.append(extra_off)
 
     # 夜勤3日セット: 夜勤 -> 明け -> 公休
@@ -700,7 +709,7 @@ def generate_shift(
                     is_day[s, d] + is_after[s, d] + is_leader[s, d] + is_pair[s, d]
                 )
         for d in range(day_count - 5):
-            model.Add(sum(work_terms[d:d + 6]) <= 5)
+            model.Add(sum(work_terms[d:d + 6]) <= 5 + slack("consec", (s, d), 1))
 
     # 月間夜勤上限
     night_counts = []
@@ -709,8 +718,91 @@ def generate_shift(
         model.Add(
             night_count == sum(is_leader[s, d] + is_pair[s, d] for d in range(day_count))
         )
-        model.Add(night_count <= max_night_shifts)
+        model.Add(night_count <= max_night_shifts + slack("night", s, day_count))
         night_counts.append(night_count)
+
+    return ModelParts(
+        model=model,
+        is_off=is_off,
+        is_after=is_after,
+        is_leader=is_leader,
+        is_pair=is_pair,
+        is_day=is_day,
+        is_7b=is_7b,
+        is_day_leader=is_day_leader,
+        extra_off_vars=extra_off_vars,
+        night_counts=night_counts,
+        slacks=slacks,
+    )
+
+
+def generate_shift(
+    staff_ids: List[str],
+    staff_floors: List[int],
+    year: int,
+    month: int,
+    schedule: List[List[str]],
+    settings: Dict,
+) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
+    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
+
+    staff_count = len(staff_ids)
+    precheck = precheck_schedule(staff_ids, year, month, schedule, settings)
+    validated_settings = precheck.validated_settings
+    day_count = precheck.day_count
+    normalized = precheck.normalized
+    fixed_types = precheck.fixed_types
+    pre_completion_normalized = precheck.pre_completion_normalized
+    warnings = precheck.warnings
+    conflict_warnings = precheck.conflict_warnings
+    night_leader_count = validated_settings["night_leader_count"]
+    night_eligible_count = validated_settings["night_eligible_count"]
+    max_night_shifts = validated_settings["max_night_shifts"]
+    day_leader_count = validated_settings["day_leader_count"]
+    day_required_count = validated_settings["day_required_count"]
+    off_target = validated_settings["days_off_count"]
+
+    empty_day_leaders: List[Optional[str]] = [None] * day_count
+
+
+    if conflict_warnings:
+        return pre_completion_normalized, conflict_warnings, list(empty_day_leaders)
+
+    # 固定夜勤がある場合は、空欄にだけ「明」「公」を補完する。
+    for s in range(staff_count):
+        for d in range(day_count):
+            if fixed_types[s][d] not in {"leader_night", "pair_night"}:
+                continue
+            if d + 1 < day_count and fixed_types[s][d + 1] == "blank":
+                fixed_types[s][d + 1] = "after"
+                normalized[s][d + 1] = AFTER
+            if d + 2 < day_count and fixed_types[s][d + 2] == "blank":
+                fixed_types[s][d + 2] = "off"
+                normalized[s][d + 2] = HOLIDAY
+
+    # 月初の固定「明」（前月末の夜勤セットの持ち越し）は、2日目が空欄なら「公」を補完する。
+    for s in range(staff_count):
+        if fixed_types[s][0] != "after":
+            continue
+        if day_count > 1 and fixed_types[s][1] == "blank":
+            fixed_types[s][1] = "off"
+            normalized[s][1] = HOLIDAY
+
+    parts = _build_model(
+        staff_count,
+        day_count,
+        year,
+        month,
+        normalized,
+        fixed_types,
+        validated_settings,
+    )
+    model = parts.model
+    is_off, is_after = parts.is_off, parts.is_after
+    is_leader, is_pair = parts.is_leader, parts.is_pair
+    is_day, is_7b = parts.is_day, parts.is_7b
+    is_day_leader = parts.is_day_leader
+    extra_off_vars, night_counts = parts.extra_off_vars, parts.night_counts
 
     objective_terms = []
 
