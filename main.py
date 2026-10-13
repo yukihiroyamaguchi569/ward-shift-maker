@@ -4,7 +4,7 @@
 
 import calendar
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from excel_handler import read_excel, write_excel
-from solver import SettingsValidationError, generate_shift
+from solver import SettingsValidationError, generate_shift, precheck_schedule
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -86,15 +86,8 @@ async def upload_excel(file: UploadFile = File(...)):
     return data
 
 
-@app.post("/api/generate")
-async def generate(request: GenerateRequest):
-    """
-    シフトを自動生成
-
-    Returns:
-        { schedule, warnings, day_leaders }
-    """
-    # バリデーション
+def _require_settings(settings: Dict[str, Any]) -> None:
+    """必須の設定キーが揃っているか確認する。"""
     required_keys = [
         "year",
         "month",
@@ -104,22 +97,38 @@ async def generate(request: GenerateRequest):
         "max_night_shifts",
     ]
     for key in required_keys:
-        if key not in request.settings:
+        if key not in settings:
             raise HTTPException(
                 status_code=400,
                 detail=f"設定が不足しています: {key}",
             )
 
+
+def _parse_year_month(settings: Dict[str, Any]) -> Tuple[int, int]:
     try:
-        try:
-            year = int(request.settings["year"])
-            month = int(request.settings["month"])
-        except (TypeError, ValueError):
-            raise SettingsValidationError("year と month は整数で指定してください。")
-        if year < 1:
-            raise SettingsValidationError("year は1以上にしてください。")
-        if not 1 <= month <= 12:
-            raise SettingsValidationError("month は1以上12以下にしてください。")
+        year = int(settings["year"])
+        month = int(settings["month"])
+    except (TypeError, ValueError):
+        raise SettingsValidationError("year と month は整数で指定してください。")
+    if year < 1:
+        raise SettingsValidationError("year は1以上にしてください。")
+    if not 1 <= month <= 12:
+        raise SettingsValidationError("month は1以上12以下にしてください。")
+    return year, month
+
+
+@app.post("/api/generate")
+async def generate(request: GenerateRequest):
+    """
+    シフトを自動生成
+
+    Returns:
+        { schedule, warnings, day_leaders }
+    """
+    _require_settings(request.settings)
+
+    try:
+        year, month = _parse_year_month(request.settings)
         schedule, warnings, day_leaders = generate_shift(
             staff_ids=request.staff_ids,
             staff_floors=request.staff_floors,
@@ -137,6 +146,36 @@ async def generate(request: GenerateRequest):
         )
 
     return {"schedule": schedule, "warnings": warnings, "day_leaders": day_leaders}
+
+
+@app.post("/api/check")
+async def check(request: GenerateRequest):
+    """
+    シフト作成前の事前チェック（ソルバーは実行しない）
+
+    Returns:
+        { conflicts, notices }
+    """
+    _require_settings(request.settings)
+
+    try:
+        year, month = _parse_year_month(request.settings)
+        result = precheck_schedule(
+            staff_ids=request.staff_ids,
+            year=year,
+            month=month,
+            schedule=request.schedule,
+            settings=request.settings,
+        )
+    except SettingsValidationError as e:
+        raise HTTPException(status_code=400, detail=f"設定エラー: {e}")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"事前チェック中にエラーが発生しました: {str(e)}",
+        )
+
+    return {"conflicts": result.conflict_warnings, "notices": result.warnings}
 
 
 @app.post("/api/download")
