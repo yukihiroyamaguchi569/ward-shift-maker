@@ -296,6 +296,7 @@ const PRECHECK_TIMEOUT_MS = 15000;
 const PRECHECK_DEBOUNCE_MS = 300;
 
 function schedulePrecheck() {
+    precheckSeq++;
     clearTimeout(precheckTimer);
     precheckTimer = setTimeout(runPrecheck, PRECHECK_DEBOUNCE_MS);
 }
@@ -343,6 +344,7 @@ async function runPrecheck() {
         }
     } catch (err) {
         console.warn("作成前チェックに失敗しました:", err);
+        if (seq === precheckSeq && !generatedSchedule) hideWarnings();
     } finally {
         clearTimeout(timeoutId);
     }
@@ -382,18 +384,24 @@ async function generateShift() {
         }
 
         const result = await res.json();
-        generatedSchedule = result.schedule;
         generatedDayLeaders = result.day_leaders || null;
 
-        // ボタン有効化・ラベルを「再作成」に変更
-        generateBtn.textContent = "再作成";
-        downloadBtn.disabled = false;
+        // 日数の不一致などで返された表はファイルの列数と合わないため、
+        // 生成結果として扱わない（ダウンロードを有効にしない）
+        const aligned = result.schedule.every(row => row.length === uploadedData.dates.length);
+        generatedSchedule = aligned ? result.schedule : null;
+
+        if (aligned) {
+            // ボタン有効化・ラベルを「再作成」に変更
+            generateBtn.textContent = "再作成";
+            downloadBtn.disabled = false;
+        }
 
         // テーブル表示
         renderTable(
             uploadedData.staff_ids,
             uploadedData.dates,
-            generatedSchedule,
+            result.schedule,
             originalSchedule,
             generatedDayLeaders
         );
@@ -710,7 +718,10 @@ function showLoading(show) {
     downloadBtn.disabled = show || !generatedSchedule;
 }
 
+let warningsClearTimer = null;
+
 function showWarnings(warnings) {
+    clearTimeout(warningsClearTimer);
     warningsList.innerHTML = warnings
         .map(w => `<li>${escapeHtml(w)}</li>`)
         .join("");
@@ -720,7 +731,8 @@ function showWarnings(warnings) {
 function hideWarnings() {
     hidePanel(warningsPanel);
     // Clear after transition ends
-    setTimeout(() => { warningsList.innerHTML = ""; }, 500);
+    clearTimeout(warningsClearTimer);
+    warningsClearTimer = setTimeout(() => { warningsList.innerHTML = ""; }, 500);
 }
 
 function escapeHtml(text) {
