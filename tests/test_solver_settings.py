@@ -62,7 +62,6 @@ class SolverSettingsValidationTests(unittest.TestCase):
     def test_api_returns_a_specific_setting_error_before_solving(self):
         request = GenerateRequest(
             staff_ids=["001", "002"],
-            staff_floors=[3, 3],
             dates=list(range(1, 32)),
             schedule=[[""] * 31, [""] * 31],
             settings={
@@ -82,7 +81,6 @@ class SolverSettingsValidationTests(unittest.TestCase):
     def _request(self, **overrides):
         return GenerateRequest(
             staff_ids=["001", "002"],
-            staff_floors=[3, 3],
             dates=list(range(1, 32)),
             schedule=[[""] * 31, [""] * 31],
             settings={**self.settings, "year": 2026, "month": 9, **overrides},
