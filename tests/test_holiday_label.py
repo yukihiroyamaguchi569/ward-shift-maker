@@ -28,7 +28,7 @@ def blank_schedule():
 
 def generate(schedule):
     return generate_shift(
-        staff_ids(), [3] * STAFF_COUNT, 2026, 11, schedule, SETTINGS
+        staff_ids(), 2026, 11, schedule, SETTINGS
     )
 
 

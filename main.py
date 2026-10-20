@@ -29,7 +29,6 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 class GenerateRequest(BaseModel):
     staff_ids: List[str]
-    staff_floors: List[int] = []
     dates: List[Any]
     schedule: List[List[str]]
     settings: Dict[str, Any]
@@ -131,7 +130,6 @@ async def generate(request: GenerateRequest):
         year, month = _parse_year_month(request.settings)
         schedule, warnings, day_leaders = generate_shift(
             staff_ids=request.staff_ids,
-            staff_floors=request.staff_floors,
             year=year,
             month=month,
             schedule=request.schedule,

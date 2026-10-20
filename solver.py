@@ -72,6 +72,7 @@ def validate_settings(
     night_eligible_count = _setting_int(settings, "night_eligible_count")
     max_night_shifts = _setting_int(settings, "max_night_shifts")
     day_required_count = _setting_int(settings, "day_required_count", 5)
+    sunday_day_required_count = _setting_int(settings, "sunday_day_required_count", 5)
     off_target = _setting_int(settings, "days_off_count", default_days_off_count)
 
     if day_leader_count < 1:
@@ -91,6 +92,14 @@ def validate_settings(
     if day_required_count > staff_count:
         raise SettingsValidationError(
             "day_required_count は職員数以下にしてください。"
+        )
+    if sunday_day_required_count < 1:
+        raise SettingsValidationError(
+            "sunday_day_required_count は1以上にしてください。"
+        )
+    if sunday_day_required_count > staff_count:
+        raise SettingsValidationError(
+            "sunday_day_required_count は職員数以下にしてください。"
         )
     if not 0 <= off_target <= day_count:
         raise SettingsValidationError(
@@ -112,6 +121,7 @@ def validate_settings(
         "night_eligible_count": effective_night_eligible_count,
         "max_night_shifts": max_night_shifts,
         "day_required_count": day_required_count,
+        "sunday_day_required_count": sunday_day_required_count,
         "days_off_count": off_target,
     }
 
@@ -136,6 +146,18 @@ FULLWIDTH_TO_HALFWIDTH = {
     **{0xFF21 + i: ord("A") + i for i in range(26)},
     **{0xFF41 + i: ord("a") + i for i in range(26)},
 }
+
+
+def required_day_counts(
+    year: int, month: int, day_count: int, validated_settings: Dict
+) -> List[int]:
+    """日ごとに必要な日勤人数を返す（日曜は日曜用の人数、それ以外は通常の人数）。"""
+    return [
+        validated_settings["sunday_day_required_count"]
+        if calendar.weekday(year, month, d + 1) == 6
+        else validated_settings["day_required_count"]
+        for d in range(day_count)
+    ]
 
 
 def _normalize_cell(text: str) -> str:
@@ -201,7 +223,9 @@ def precheck_schedule(
     night_leader_count = validated_settings["night_leader_count"]
     night_eligible_count = validated_settings["night_eligible_count"]
     max_night_shifts = validated_settings["max_night_shifts"]
-    day_required_count = validated_settings["day_required_count"]
+    day_required_counts = required_day_counts(
+        year, month, day_count, validated_settings
+    )
     off_target = validated_settings["days_off_count"]
 
     normalized = []
@@ -417,10 +441,10 @@ def precheck_schedule(
             for s in range(staff_count)
             if fixed_types[s][d] in {"blank", "day", "leader_night", "pair_night"}
         )
-        needed = max(0, day_required_count - fixed_other_count) + 2
+        needed = max(0, day_required_counts[d] - fixed_other_count) + 2
         if available < needed:
             conflict_warnings.append(
-                f"{d + 1}日: 日勤{day_required_count}人と夜勤2人を確保できません"
+                f"{d + 1}日: 日勤{day_required_counts[d]}人と夜勤2人を確保できません"
                 f"（配置可能 {available}人 / 必要 {needed}人。固定の休み・明けが多すぎる可能性があります）。"
             )
 
@@ -448,7 +472,7 @@ def precheck_schedule(
         fixed_other_count = sum(
             1 for s in range(staff_count) if fixed_types[s][d] == "fixed_other"
         )
-        required_work_cells += max(0, day_required_count - fixed_other_count)
+        required_work_cells += max(0, day_required_counts[d] - fixed_other_count)
     if total_work_cells < required_work_cells:
         conflict_warnings.append(
             f"人員不足: 1か月の勤務可能コマ数 {total_work_cells}"
@@ -501,7 +525,9 @@ def _build_model(
     night_eligible_count = validated_settings["night_eligible_count"]
     max_night_shifts = validated_settings["max_night_shifts"]
     day_leader_count = validated_settings["day_leader_count"]
-    day_required_count = validated_settings["day_required_count"]
+    day_required_counts = required_day_counts(
+        year, month, day_count, validated_settings
+    )
     off_target = validated_settings["days_off_count"]
 
     model = cp_model.CpModel()
@@ -625,7 +651,7 @@ def _build_model(
             == 1
         )
 
-    # 日勤配置: 毎日（日曜含む）日勤を day_required_count 人以上確保する。
+    # 日勤配置: 毎日（日曜含む）日勤を日ごとの必要人数（日曜は sunday_day_required_count）以上確保する。
     # 委/研など日勤扱いの固定セル（fixed_other）は、フロントの日勤計の集計に合わせて
     # 定数としてカウントに含める。
     for d in range(day_count):
@@ -635,8 +661,8 @@ def _build_model(
         model.Add(
             sum(is_day[s, d] for s in range(staff_count))
             + fixed_other_count
-            + slack("day", d, day_required_count)
-            >= day_required_count
+            + slack("day", d, day_required_counts[d])
+            >= day_required_counts[d]
         )
 
     # 日勤リーダー: 毎日1人。リーダーは実際の日勤（is_day、固定の日/7b 含む）で
@@ -888,7 +914,9 @@ def diagnose_infeasibility(
     slacks = parts.slacks
     leader_count = validated_settings["night_leader_count"]
     day_leader_count = validated_settings["day_leader_count"]
-    day_required_count = validated_settings["day_required_count"]
+    day_required_counts = required_day_counts(
+        year, month, day_count, validated_settings
+    )
     off_target = validated_settings["days_off_count"]
     messages: List[str] = []
 
@@ -910,14 +938,17 @@ def diagnose_infeasibility(
             f"日勤リーダー候補（上から{day_leader_count}人）の誰も日勤に入れません。"
             "候補の休み・予定を見直してください。"
         )
-    short_by_amount: Dict[int, List[int]] = {}
+    # 不足数と必要人数が同じ日をまとめる（日曜だけ必要人数が違う場合があるため）。
+    short_by_amount: Dict[Tuple[int, int], List[int]] = {}
     for d, var in sorted(slacks.get("day", {}).items()):
         if solver.Value(var) > 0:
-            short_by_amount.setdefault(solver.Value(var), []).append(d)
-    for amount, amount_days in sorted(short_by_amount.items()):
+            short_by_amount.setdefault(
+                (solver.Value(var), day_required_counts[d]), []
+            ).append(d)
+    for (amount, required), amount_days in sorted(short_by_amount.items()):
         messages.append(
             f"{_format_days(amount_days)}: 日勤が{amount}人不足します"
-            f"（必要 {day_required_count}人）。"
+            f"（必要 {required}人）。"
         )
     days = _short_days(slacks.get("7b", {}), solver)
     if days:
@@ -941,14 +972,11 @@ def diagnose_infeasibility(
 
 def generate_shift(
     staff_ids: List[str],
-    staff_floors: List[int],
     year: int,
     month: int,
     schedule: List[List[str]],
     settings: Dict,
 ) -> Tuple[List[List[str]], List[str], List[Optional[str]]]:
-    del staff_floors  # 将来の日曜ルール（階別人数）用に残す
-
     staff_count = len(staff_ids)
     precheck = precheck_schedule(staff_ids, year, month, schedule, settings)
     validated_settings = precheck.validated_settings

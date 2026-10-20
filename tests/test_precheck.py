@@ -56,7 +56,7 @@ class PrecheckScheduleTests(unittest.TestCase):
         result = precheck_schedule(staff_ids(19), 2026, 11, schedule, SETTINGS)
         self.assertIn(message, result.conflict_warnings)
         _, warnings, _ = generate_shift(
-            staff_ids(19), [3] * 19, 2026, 11, schedule, SETTINGS
+            staff_ids(19), 2026, 11, schedule, SETTINGS
         )
         self.assertIn(message, warnings)
 
@@ -91,7 +91,7 @@ class PrecheckScheduleTests(unittest.TestCase):
     def test_generate_shift_returns_precheck_conflicts_early(self):
         schedule = overbooked_day_29_schedule()
         result_schedule, warnings, day_leaders = generate_shift(
-            staff_ids(17), [3] * 17, 2026, 11, schedule, SETTINGS
+            staff_ids(17), 2026, 11, schedule, SETTINGS
         )
         self.assertTrue(any(DAY_29_MESSAGE in w for w in warnings), warnings)
         # 入力の「公」は正規化され、返る勤務表では「公休」になる
@@ -101,7 +101,7 @@ class PrecheckScheduleTests(unittest.TestCase):
 
     def test_generate_shift_still_fills_clean_input(self):
         result_schedule, _, _ = generate_shift(
-            staff_ids(19), [3] * 19, 2026, 11, blank_schedule(19, 30), SETTINGS
+            staff_ids(19), 2026, 11, blank_schedule(19, 30), SETTINGS
         )
         self.assertTrue(all(cell != "" for row in result_schedule for cell in row))
 
@@ -110,7 +110,6 @@ class CheckEndpointTests(unittest.TestCase):
     def build_request(self, schedule, staff_count, settings):
         return GenerateRequest(
             staff_ids=staff_ids(staff_count),
-            staff_floors=[3] * staff_count,
             dates=list(range(1, 31)),
             schedule=schedule,
             settings=settings,
