@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from excel_handler import read_excel, write_excel
+from excel_handler import UnsupportedExcelError, read_excel, write_excel
 from solver import SettingsValidationError, generate_shift, precheck_schedule
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +70,8 @@ async def upload_excel(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         data = read_excel(contents)
+    except UnsupportedExcelError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=400,
