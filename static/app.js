@@ -199,6 +199,7 @@ const SHIFT_CLASS_MAP = {
     "〜": "shift-morning-after",
     "〜⋆": "shift-morning-after",
     "公": "shift-holiday",
+    "公休": "shift-holiday",
     "休": "shift-holiday",
     "希": "shift-requested",
     "委": "shift-committee",
@@ -509,7 +510,7 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
     }
     html += '<th class="stats-col">夜</th>';
     html += '<th class="stats-col">日</th>';
-    html += '<th class="stats-col">公</th>';
+    html += '<th class="stats-col">公休</th>';
     html += "</tr></thead>";
 
     // データ行
@@ -546,9 +547,9 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
                 ? ((original[i] && original[i][j]) || "").trim()
                 : shift.trim();
             const isFixed = original ? originalShift !== "" : false;
-            // 入力時点で休みとして指定されたセルは、生成後も「公」のまま表示される。
+            // 入力時点で休みとして指定されたセルは、生成後も「公休」のまま表示される。
             // そのため、生成結果の文字ではなく元データを見て希望休の色を決める。
-            const isRequestedOff = ["公", "希", "休", "希望休", "希望"].includes(originalShift);
+            const isRequestedOff = ["公", "公休", "希", "休", "希望休", "希望"].includes(originalShift);
             const cellClass = isRequestedOff ? "shift-requested" : getCellClass(shift);
             const fixedClass = isFixed ? " shift-fixed" : "";
             const leaderClass = dayLeaders && dayLeaders[j] === sid ? " shift-day-leader" : "";
@@ -556,7 +557,7 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
 
             if (["夜", "★", "☆"].includes(shift)) nightCount++;
             if (["日", "7b"].includes(shift)) dayCount++;
-            if (["公", "希", "休", "有"].includes(shift)) offCount++;
+            if (["公", "公休", "希", "休", "有"].includes(shift)) offCount++;
         }
 
         const nightBadge = getStatBadge(nightCount, settings.max_night_shifts, "night");
@@ -579,7 +580,7 @@ function renderTable(staffIds, dates, schedule, original = null, dayLeaders = nu
             if (sh === "日" || sh === "7b") dayTotal++;
             // 固定日勤扱い（委/研など）もカウント
             const origSh = original && original[i][j] ? original[i][j].trim() : "";
-            if (origSh && !["公","希","休","有","夜","明","日","7b",""].includes(origSh)) dayTotal++;
+            if (origSh && !["公","公休","希","休","有","夜","明","日","7b",""].includes(origSh)) dayTotal++;
         }
         const shortage = dayTotal < required;
         html += `<td class="${shortage ? 'text-red-600 font-bold' : 'text-gray-600'}">${dayTotal}</td>`;

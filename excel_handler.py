@@ -22,7 +22,8 @@ SHIFT_COLORS = {
     "日": {"bg": "FFFFFF", "fg": "333333"},  # 白背景
     "夜": {"bg": "1e3a5f", "fg": "FFFFFF"},  # 濃紺背景・白文字
     "明": {"bg": "bbdefb", "fg": "333333"},  # 水色背景
-    "公": {"bg": "c8e6c9", "fg": "333333"},  # 薄緑背景
+    "公": {"bg": "c8e6c9", "fg": "333333"},  # 薄緑背景（旧表記）
+    "公休": {"bg": "c8e6c9", "fg": "333333"},  # 薄緑背景
     "希": {"bg": "fce7f3", "fg": "333333"},  # 薄ピンク背景
     "委": {"bg": "ffe0b2", "fg": "333333"},  # 薄橙背景
     "休": {"bg": "e0e0e0", "fg": "333333"},  # グレー背景
@@ -187,14 +188,14 @@ def write_excel(
                     bold=(shift == "夜"),
                 )
 
-            # 入力時点で休みとして指定されたセルは、生成後も「公」のままになる。
+            # 入力時点で休みとして指定されたセルは、生成後も「公休」のままになる。
             # 元データを参照して希望休を薄いピンクで示す。
             original_shift = ""
             if original_schedule and row_idx < len(original_schedule):
                 original_row = original_schedule[row_idx]
                 if col_idx < len(original_row) and original_row[col_idx] is not None:
                     original_shift = str(original_row[col_idx]).strip()
-            if original_shift in {"公", "希", "休", "希望休", "希望"}:
+            if original_shift in {"公", "公休", "希", "休", "希望休", "希望"}:
                 cell.fill = PatternFill(
                     start_color="fce7f3",
                     end_color="fce7f3",

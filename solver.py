@@ -1,8 +1,8 @@
 """
 全セルを確定させる勤務表ソルバー。
 
-night-only-rule.md に合わせて、`★/☆/明/公` の夜勤3日セットに加え、
-日勤（日/7b）と公休（公）で全セルを確定した勤務表を生成する。
+night-only-rule.md に合わせて、`★/☆/明/公休` の夜勤3日セットに加え、
+日勤（日/7b）と公休で全セルを確定した勤務表を生成する。
 7b はスタッフの属性ではなく日ごとの割り当てで、日曜以外は毎日1人を
 日勤者の中からソルバーが選ぶ（同一スタッフが日により日/7bを担当する）。
 公休は1人あたり最低9日（2月のみ8日）で、希・有もカウントに含む
@@ -19,14 +19,14 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from ortools.sat.python import cp_model
 
 BLANK = ""
-HOLIDAY = "公"
+HOLIDAY = "公休"
 AFTER = "明"
 LEADER_NIGHT = "★"
 PAIR_NIGHT = "☆"
 DAY_SHIFT = "日"
 DAY_SHIFT_7B = "7b"
 
-OFF_TYPES = {"公", "希", "休", "有"}
+OFF_TYPES = {HOLIDAY, "希", "有"}
 LEADER_MARKS = {LEADER_NIGHT}
 PAIR_MARKS = {PAIR_NIGHT, "夜"}  # 既存データ互換
 AFTER_MARKS = {AFTER, "～", "～⋆", "〜", "〜⋆"}
@@ -116,8 +116,9 @@ def validate_settings(
     }
 
 
-# 同義語の正規化（出力セルは正規化後の1文字表記になる。既存の 休→公 と同じ挙動）
+# 同義語の正規化（出力セルは正規化後の表記になる。旧表記の 公・休 も 公休 になる）
 SYNONYM_MARKS = {
+    "公": HOLIDAY,
     "休": HOLIDAY,
     "公休": HOLIDAY,
     "希望休": "希",
@@ -215,7 +216,7 @@ def precheck_schedule(
         for s in range(staff_count)
     ]
 
-    # 補完（明・公の自動補完）前の状態を保持しておく。ソルバー実行前の警告や
+    # 補完（明・公休の自動補完）前の状態を保持しておく。ソルバー実行前の警告や
     # INFEASIBLE 時には、入力と異なる表を返さないようこちらを返す。
     pre_completion_normalized = [row[:] for row in normalized]
 
@@ -670,8 +671,8 @@ def _build_model(
             sum(is_7b[s, d] for s in range(staff_count)) + slack("7b", d, 1) == 1
         )
 
-    # 公休日数: 目標（off_target）は最低限。各スタッフの休み（固定の公・希・有＋
-    # ソルバー配置の公）の合計を max(目標, 固定 off 数) 以上にする（下限のみ）。
+    # 公休日数: 目標（off_target）は最低限。各スタッフの休み（固定の公休・希・有＋
+    # ソルバー配置の公休）の合計を max(目標, 固定 off 数) 以上にする（下限のみ）。
     # 等式にしないのは、固定休の並びによっては5連勤制限などのハード制約を満たす
     # ために最低ラインを超える休みが必要になるため（等式だと INFEASIBLE になる）。
     # 不要な水増しは下の extra_off ペナルティで抑える。
@@ -715,7 +716,7 @@ def _build_model(
                 model.Add(is_after[s, d] <= is_leader[s, d - 1] + is_pair[s, d - 1])
 
     # 公休は一般の休みとして自由に配置できる（「夜勤の2日後のみ」の制約は撤廃）。
-    # 夜勤セットの implication（夜勤→翌々日公）は上で維持している。
+    # 夜勤セットの implication（夜勤→翌々日公休）は上で維持している。
 
     # 固定セルが夜勤セットと衝突するなら、その前日は夜勤不可。
     for s in range(staff_count):
@@ -970,7 +971,7 @@ def generate_shift(
     if conflict_warnings:
         return pre_completion_normalized, conflict_warnings, list(empty_day_leaders)
 
-    # 固定夜勤がある場合は、空欄にだけ「明」「公」を補完する。
+    # 固定夜勤がある場合は、空欄にだけ「明」「公休」を補完する。
     for s in range(staff_count):
         for d in range(day_count):
             if fixed_types[s][d] not in {"leader_night", "pair_night"}:
@@ -982,7 +983,7 @@ def generate_shift(
                 fixed_types[s][d + 2] = "off"
                 normalized[s][d + 2] = HOLIDAY
 
-    # 月初の固定「明」（前月末の夜勤セットの持ち越し）は、2日目が空欄なら「公」を補完する。
+    # 月初の固定「明」（前月末の夜勤セットの持ち越し）は、2日目が空欄なら「公休」を補完する。
     for s in range(staff_count):
         if fixed_types[s][0] != "after":
             continue
@@ -1080,7 +1081,7 @@ def generate_shift(
     # 希望休（希）は夜勤セット3日目の公休を兼ねてよい（確定仕様）。
     # 「希」の2日前が空欄なら、そこに夜勤を置く配置をボーナスで優先する（ソフト条件）。
     # 重み30は既存の重み（ペア候補違反1000・ばらつき100・ブロック分散50）より小さくし、
-    # 公平性を崩してまで兼ねることはしない。対象は「希」のみ（公・有などは対象外）。
+    # 公平性を崩してまで兼ねることはしない。対象は「希」のみ（公休・有などは対象外）。
     for s in range(night_eligible_count):
         for d in range(day_count):
             if normalized[s][d] != "希":

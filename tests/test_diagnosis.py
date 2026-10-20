@@ -120,7 +120,7 @@ class DiagnosisTests(unittest.TestCase):
             result, warnings, _ = run(schedule)
         self.assertEqual(warnings[0], FIRST_LINE)
         self.assertNotIn(LAST_LINE, warnings)
-        # 返すのは補完前の正規化済み勤務表（休→公）で、解の結果は含まない
+        # 返すのは補完前の正規化済み勤務表（休→公休）で、解の結果は含まない
         expected = solver.precheck_schedule(
             staff_ids(), 2026, 11, schedule, SETTINGS
         ).pre_completion_normalized
