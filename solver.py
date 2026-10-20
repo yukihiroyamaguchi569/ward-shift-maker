@@ -72,7 +72,9 @@ def validate_settings(
     night_eligible_count = _setting_int(settings, "night_eligible_count")
     max_night_shifts = _setting_int(settings, "max_night_shifts")
     day_required_count = _setting_int(settings, "day_required_count", 5)
-    sunday_day_required_count = _setting_int(settings, "sunday_day_required_count", 5)
+    sunday_day_required_count = _setting_int(
+        settings, "sunday_day_required_count", day_required_count
+    )
     off_target = _setting_int(settings, "days_off_count", default_days_off_count)
 
     if day_leader_count < 1:
@@ -1159,11 +1161,14 @@ def generate_shift(
                 f"夜勤要員不足: 必要 {required_nights} 回、最大 {total_capacity} 回です。"
             )
         # 日勤必要人数が原因になり得るかの単純なヒント
-        # （1日あたり: 日勤 day_required_count 人 + 夜勤2人 + 明け2人）
-        daily_min_staff = day_required_count + 2 + 2
+        # （1日あたり: 日勤（平日と日曜の多い方）+ 夜勤2人 + 明け2人）
+        max_day_required = max(
+            day_required_count, validated_settings["sunday_day_required_count"]
+        )
+        daily_min_staff = max_day_required + 2 + 2
         if staff_count < daily_min_staff:
             warnings.append(
-                f"日勤要員不足の可能性: 1日あたり日勤{day_required_count}人＋夜勤2人＋明け2人"
+                f"日勤要員不足の可能性: 1日あたり日勤{max_day_required}人＋夜勤2人＋明け2人"
                 f"（計{daily_min_staff}人）が必要ですが、職員数は{staff_count}人です。"
             )
         return pre_completion_normalized, warnings, list(empty_day_leaders)

@@ -17,7 +17,6 @@ class SolverSettingsValidationTests(unittest.TestCase):
             "night_eligible_count": 2,
             "max_night_shifts": 5,
             "day_required_count": 1,
-            "sunday_day_required_count": 1,
             "days_off_count": 9,
         }
 

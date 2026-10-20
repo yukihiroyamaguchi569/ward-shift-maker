@@ -100,6 +100,27 @@ class SundayDayCountTests(unittest.TestCase):
         self.assertIn("1日: 日勤が1人不足します（必要 5人）。", messages)
 
 
+class StaffShortageHintTests(unittest.TestCase):
+    def test_hint_uses_the_larger_of_weekday_and_sunday_counts(self):
+        settings = {
+            "year": YEAR,
+            "month": MONTH,
+            "day_leader_count": 1,
+            "night_leader_count": 1,
+            "night_eligible_count": 6,
+            "max_night_shifts": 5,
+            "day_required_count": 1,
+            "sunday_day_required_count": 3,
+            "days_off_count": 0,
+        }
+        ids = [str(i + 1) for i in range(6)]
+        schedule = [[""] * DAY_COUNT for _ in ids]
+        _, warnings, _ = generate_shift(ids, YEAR, MONTH, schedule, settings)
+        self.assertTrue(
+            any("日勤3人＋夜勤2人＋明け2人（計7人）" in w for w in warnings), warnings
+        )
+
+
 class SundaySettingValidationTests(unittest.TestCase):
     def setUp(self):
         self.settings = {
@@ -110,9 +131,18 @@ class SundaySettingValidationTests(unittest.TestCase):
             "day_required_count": 1,
         }
 
-    def test_defaults_to_five(self):
+    def test_defaults_to_day_required_count(self):
         validated = validate_settings(self.settings, staff_count=6, day_count=30)
+        self.assertEqual(validated["sunday_day_required_count"], 1)
+
+    def test_defaults_to_five_when_neither_is_given(self):
+        settings = {k: v for k, v in self.settings.items() if k != "day_required_count"}
+        validated = validate_settings(settings, staff_count=6, day_count=30)
         self.assertEqual(validated["sunday_day_required_count"], 5)
+
+    def test_old_request_with_four_staff_is_not_rejected(self):
+        validated = validate_settings(self.settings, staff_count=4, day_count=30)
+        self.assertEqual(validated["sunday_day_required_count"], 1)
 
     def test_rejects_zero_and_more_than_staff_count(self):
         for value in (0, 7):
