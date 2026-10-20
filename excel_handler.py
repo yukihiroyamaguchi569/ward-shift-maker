@@ -32,6 +32,14 @@ SHIFT_COLORS = {
 }
 
 
+class UnsupportedExcelError(Exception):
+    """パスワード付き・旧形式など、読み込めないことが原因まで特定できるファイル"""
+
+
+# OLE 複合ファイルの先頭8バイト（パスワード付き xlsx と旧 .xls が該当）
+OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
+
+
 def read_excel(file_bytes: bytes) -> Dict[str, Any]:
     """
     エクセルファイルを読み込んでJSON用の辞書を返す
@@ -43,6 +51,17 @@ def read_excel(file_bytes: bytes) -> Dict[str, Any]:
             "schedule": [["", "委", "", ...], ...],
         }
     """
+    if file_bytes.startswith(OLE_SIGNATURE):
+        if "EncryptionInfo".encode("utf-16-le") in file_bytes:
+            raise UnsupportedExcelError(
+                "Excel にパスワードがかかっていると読み込めません。"
+                "パスワードを外して保存し直してから読み込んでください。"
+            )
+        raise UnsupportedExcelError(
+            "古い形式（.xls）のファイルは読み込めません。"
+            "Excel で xlsx 形式で保存し直してください。"
+        )
+
     wb = load_workbook(BytesIO(file_bytes), data_only=True)
     ws = wb.active
 
