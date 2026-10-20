@@ -94,7 +94,9 @@ class PrecheckScheduleTests(unittest.TestCase):
             staff_ids(17), [3] * 17, 2026, 11, schedule, SETTINGS
         )
         self.assertTrue(any(DAY_29_MESSAGE in w for w in warnings), warnings)
-        self.assertEqual(result_schedule, schedule)
+        # 入力の「公」は正規化され、返る勤務表では「公休」になる
+        expected = [["公休" if c == "公" else c for c in row] for row in schedule]
+        self.assertEqual(result_schedule, expected)
         self.assertEqual(day_leaders, [None] * 30)
 
     def test_generate_shift_still_fills_clean_input(self):
