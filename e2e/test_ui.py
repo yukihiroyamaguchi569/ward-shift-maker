@@ -4,6 +4,7 @@
 入力の xlsx はテスト内で合成する（実データは使わない）。
 """
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -14,7 +15,7 @@ import urllib.request
 from io import BytesIO
 
 from openpyxl import Workbook
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 DAY_COUNT = 30  # 2026年11月
@@ -82,13 +83,11 @@ class UiTests(unittest.TestCase):
         )
         cls.playwright = None
         cls.browser = None
-        try:
-            cls.wait_for_server()
-            cls.playwright = sync_playwright().start()
-            cls.browser = cls.playwright.chromium.launch()
-        except BaseException:
-            cls.tearDownClass()
-            raise
+        # setUpClass が途中で失敗しても tearDownClass は呼ばれないため、ここで後始末を登録する
+        cls.addClassCleanup(cls.stop_all)
+        cls.wait_for_server()
+        cls.playwright = sync_playwright().start()
+        cls.browser = cls.playwright.chromium.launch()
 
     @classmethod
     def wait_for_server(cls):
@@ -104,17 +103,20 @@ class UiTests(unittest.TestCase):
         raise RuntimeError("uvicorn が時間内に応答しませんでした")
 
     @classmethod
-    def tearDownClass(cls):
-        if cls.browser:
-            cls.browser.close()
-        if cls.playwright:
-            cls.playwright.stop()
-        cls.server.terminate()
+    def stop_all(cls):
+        # ブラウザの終了で例外が出ても、サーバーは必ず止める
         try:
-            cls.server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            cls.server.kill()
-            cls.server.wait()
+            if cls.browser:
+                cls.browser.close()
+            if cls.playwright:
+                cls.playwright.stop()
+        finally:
+            cls.server.terminate()
+            try:
+                cls.server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls.server.kill()
+                cls.server.wait()
 
     def setUp(self):
         # テストごとに新しいコンテキスト（localStorage を持ち越さない）
@@ -183,6 +185,18 @@ class UiTests(unittest.TestCase):
         self.page.locator("#warningsList li", has_text=PRECHECK_MESSAGE).wait_for()
         self.assertIn("29日", self.warnings_text())
 
+        # そのまま作成を押しても勤務表は作られない（競合の理由が出て、空欄は補完されない）
+        self.page.click("#generateBtn")
+        self.page.locator("#generateBtn", has_text="再作成").wait_for()
+        self.assertIn("29日", self.warnings_text())
+        self.assertNotIn(PRECHECK_MESSAGE, self.warnings_text())
+        # 入力が全部空欄の最終職員の行は、日勤・夜勤・公休が入らず空のまま
+        last_row_cells = self.page.locator("#scheduleTable tbody tr:nth-child(17) td.shift-cell")
+        self.assertEqual(last_row_cells.count(), 30)
+        self.assertEqual(set(last_row_cells.all_inner_texts()), {""})
+        # 現状の挙動の記録: 競合で未完成の表でも、列数が合えばダウンロードは有効になる
+        self.assertTrue(self.page.locator("#downloadBtn").is_enabled())
+
     def test_diagnosis_shows_cause_when_unsolvable(self):
         self.page.fill("#dayLeaderCount", "3")
         self.upload(day_leader_blocked())
@@ -207,8 +221,9 @@ class UiTests(unittest.TestCase):
         self.page.click("#generateBtn")
         self.wait_for_dialog()
         # 固まらず、もう一度押せる
-        self.page.locator("#loading.panel-hidden").wait_for(state="attached")
-        self.assertTrue(self.page.locator("#generateBtn").is_enabled())
+        # alert は finally より先に出ることがあるので、復帰は expect で待つ
+        expect(self.page.locator("#loading")).to_have_class(re.compile(r"panel-hidden"))
+        expect(self.page.locator("#generateBtn")).to_be_enabled()
         self.assertEqual(self.page.locator("#generateBtn").inner_text(), "シフト作成")
         self.assertTrue(self.page.locator("#downloadBtn").is_disabled())
 
