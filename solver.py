@@ -14,6 +14,7 @@ night-only-rule.md に合わせて、`★/☆/明/公休` の夜勤3日セット
 
 import calendar
 import logging
+import os
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from ortools.sat.python import cp_model
@@ -972,6 +973,20 @@ def diagnose_infeasibility(
     return messages
 
 
+DEFAULT_SOLVE_TIME_LIMIT_SECONDS = 30
+
+
+def _solve_time_limit_seconds() -> float:
+    """生成の制限時間（秒）。環境変数 SOLVER_TIME_LIMIT_SECONDS で変更でき、不正な値は 30 に戻す"""
+    try:
+        value = float(os.environ.get("SOLVER_TIME_LIMIT_SECONDS", ""))
+    except ValueError:
+        return DEFAULT_SOLVE_TIME_LIMIT_SECONDS
+    if not value > 0 or value == float("inf"):
+        return DEFAULT_SOLVE_TIME_LIMIT_SECONDS
+    return value
+
+
 def generate_shift(
     staff_ids: List[str],
     year: int,
@@ -1130,7 +1145,7 @@ def generate_shift(
     model.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30
+    solver.parameters.max_time_in_seconds = _solve_time_limit_seconds()
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = False
 
