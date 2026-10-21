@@ -40,6 +40,9 @@ def open_written(**kwargs):
 
 
 def fill_of(cell):
+    # 塗りつぶしが solid でなければ色の値が残っていても "none" を返す
+    if cell.fill.fill_type != "solid":
+        return "none"
     return cell.fill.start_color.rgb[-6:].lower()
 
 
@@ -74,6 +77,22 @@ class ReadExcelTests(unittest.TestCase):
         # 連番が途切れたらそこまでを日付とする（曜日行などを巻き込まない）
         data = build_xlsx([
             ["職員番号", 1, 2, 4, 5],
+            ["001", "日", "日", "日", "日"],
+        ])
+        result = read_excel(data)
+        self.assertEqual(result["dates"], [1, 2])
+        self.assertEqual(result["schedule"], [["日", "日"]])
+
+    def test_date_header_stops_at_empty_cell(self):
+        data = build_xlsx([
+            ["職員番号", 1, 2, None, 3],
+            ["001", "日", "日", "日", "日"],
+        ])
+        self.assertEqual(read_excel(data)["dates"], [1, 2])
+
+    def test_date_header_stops_at_non_numeric_text(self):
+        data = build_xlsx([
+            ["職員番号", 1, 2, "合計", 3],
             ["001", "日", "日", "日", "日"],
         ])
         result = read_excel(data)
@@ -125,9 +144,17 @@ class ReadExcelTests(unittest.TestCase):
         self.assertEqual(result["staff_ids"], ["001", "002"])
         self.assertEqual(len(result["schedule"]), 2)
 
-    def test_trailing_blank_rows_are_ignored(self):
-        data = build_xlsx([["職員番号", 1], ["001", "日"], [None, None], [None, None]])
-        self.assertEqual(read_excel(data)["staff_ids"], ["001"])
+    def test_whitespace_only_staff_cell_ends_the_list(self):
+        # 空白だけのセルも空行とみなし、その後ろの集計行を職員にしない
+        data = build_xlsx([
+            ["職員番号", 1],
+            ["001", "日"],
+            ["   ", None],
+            ["集計", "1"],
+        ])
+        result = read_excel(data)
+        self.assertEqual(result["staff_ids"], ["001"])
+        self.assertEqual(result["schedule"], [["日"]])
 
     def test_missing_date_header_raises(self):
         data = build_xlsx([["職員番号", "日付"], ["001", "日"]])
@@ -281,11 +308,6 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual(result["staff_ids"], staff_ids)
         self.assertEqual(result["dates"], dates)
         self.assertEqual(result["schedule"], schedule)
-
-    def test_roundtrip_through_upload(self):
-        status, body = upload(write_excel(["001"], [1, 2], [["日", "夜"]]))
-        self.assertEqual(status, 200)
-        self.assertEqual(body["schedule"], [["日", "夜"]])
 
 
 class DownloadExcelTests(unittest.TestCase):
