@@ -1,5 +1,6 @@
 import calendar
 import copy
+import json
 import os
 import random
 import unittest
@@ -89,178 +90,151 @@ def fixed_cells_schedule():
     return schedule
 
 
+FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "valid_schedule.json")
+
+
 class CheckerDetectsViolationTests(unittest.TestCase):
+    """固定フィクスチャ（正しい勤務表）を1か所ずつ壊し、狙ったルールの違反だけが出ることを確かめる。
+
+    フィクスチャは tests/make_fixture.py で作る。作り直したら下の (職員, 日) を見直す
+    （すべて0始まりのインデックス）。ソルバーは呼ばないので毎回同じ結果になる。
+    """
+
     @classmethod
     def setUpClass(cls):
-        cls.year, cls.month, cls.count = 2026, 9, 19
-        cls.schedule = fixed_cells_schedule()
-        cls.ids = staff_ids(cls.count)
-        cls.base, cls.leaders = generate_shift(
-            cls.ids, cls.year, cls.month, cls.schedule, BASE_SETTINGS
-        )[0::2]
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        cls.year, cls.month = data["year"], data["month"]
+        cls.ids, cls.settings = data["staff_ids"], data["settings"]
+        cls.schedule, cls.base, cls.leaders = data["input"], data["result"], data["day_leaders"]
+        cls.count = len(cls.ids)
 
-    def problems(self, result=None, leaders=None, settings=None, schedule=None):
+    def problems(self, result=None, leaders=None, settings=None):
         return check_schedule(
-            schedule if schedule is not None else self.schedule,
+            self.schedule,
             result if result is not None else self.base,
             leaders if leaders is not None else self.leaders,
             self.year, self.month,
-            settings if settings is not None else BASE_SETTINGS,
+            settings if settings is not None else self.settings,
             self.ids,
         )
 
-    def pick(self, mark, staff=None, days=range(30)):
-        """生成結果から、mark のセルで、入力が空欄で、その日の日勤リーダーでない (職員, 日) を選ぶ。"""
-        staff = range(self.count) if staff is None else staff
-        for s in staff:
-            for d in days:
-                if (self.base[s][d] == mark and self.schedule[s][d] == ""
-                        and self.ids[s] != self.leaders[d]):
-                    return s, d
-        self.fail(f"条件に合う {mark} のセルが生成結果にありません")
+    def broken(self, *edits):
+        result = copy.deepcopy(self.base)
+        for s, d, mark in edits:
+            result[s][d] = mark
+        return result
 
-    def broken(self):
-        return copy.deepcopy(self.base)
-
-    def assertDetected(self, problems, keyword, *side_effects):
-        # 狙ったルールの違反が出ていて、それ以外は side_effects に挙げた
-        # 「その変異から必然的に起きる副次的な違反」だけであること。
-        self.assertTrue(any(keyword in p for p in problems), problems)
-        allowed = (keyword,) + side_effects
-        self.assertTrue(all(any(k in p for k in allowed) for p in problems), problems)
+    def assertOnly(self, problems, *keywords):
+        """違反が出ていて、すべて keywords のいずれかのルールのものであること。"""
+        self.assertTrue(problems, "違反が検出されませんでした")
+        for p in problems:
+            self.assertTrue(any(k in p for k in keywords), problems)
+        for k in keywords:
+            self.assertTrue(any(k in p for p in problems), (k, problems))
 
     def test_base_is_clean(self):
         self.assertEqual(self.problems(), [])
 
+    def test_integer_strings_in_settings(self):
+        settings = {k: str(v) for k, v in self.settings.items()}
+        self.assertEqual(self.problems(settings=settings), [])
+
     def test_blank_cell(self):
-        r = self.broken()
-        r[7][14] = ""
-        self.assertDetected(self.problems(r), "空欄")
+        self.assertOnly(self.problems(self.broken((7, 14, ""))), "空欄")
 
     def test_row_count(self):
-        self.assertDetected(self.problems(self.broken()[:-1]), "行数")
+        self.assertOnly(self.problems(self.base[:-1]), "行数")
 
     def test_column_count(self):
         r = self.broken()
         r[0] = r[0][:-1]
-        self.assertDetected(self.problems(r), "列数")
+        self.assertOnly(self.problems(r), "列数")
 
     def test_fixed_cell_changed(self):
-        r = self.broken()
-        r[3][10] = "公休"
-        self.assertDetected(self.problems(r), "固定セル")
+        self.assertEqual(self.schedule[3][10], "希")
+        self.assertOnly(self.problems(self.broken((3, 10, "公休"))), "固定セル")
 
     def test_two_leaders(self):
-        r = self.broken()
-        s, d = self.pick("日")
-        r[s][d] = "★"
-        self.assertDetected(self.problems(r), "★が2人", "夜勤の翌", "休みが", "6連勤", "必要人数")
+        # 18日に職員2を ★ にして、夜勤セット（明・公休）まで整える
+        r = self.broken((1, 17, "★"), (1, 18, "明"), (1, 19, "公休"))
+        self.assertOnly(self.problems(r), "★が2人")
+
     def test_night_outside_eligible(self):
-        r = self.broken()
-        s, d = self.pick("日", staff=range(17, self.count))
-        r[s][d] = "☆"
-        self.assertDetected(self.problems(r), "夜勤候補の範囲外", "☆が2人", "夜勤の翌", "休みが", "6連勤", "必要人数")
+        r = self.broken((18, 17, "☆"), (18, 18, "明"), (18, 19, "公休"))
+        self.assertOnly(self.problems(r), "夜勤候補の範囲外", "☆が2人")
+
     def test_leader_outside_leader_candidates(self):
-        r = self.broken()
-        s, d = self.pick("日", staff=range(8, 17))
-        r[s][d] = "★"
-        self.assertDetected(self.problems(r), "リーダー候補の範囲外", "★が2人", "夜勤の翌", "休みが", "6連勤", "必要人数")
+        r = self.broken((10, 17, "★"), (10, 18, "明"), (10, 19, "公休"))
+        self.assertOnly(self.problems(r), "リーダー候補の範囲外", "★が2人")
+
     def test_after_replaced_by_day(self):
-        r = self.broken()
-        s, d = self.pick("明", days=range(1, 29))
-        r[s][d] = "日"
-        self.assertDetected(self.problems(r), "翌日が明ではありません", "6連勤")
+        self.assertEqual(self.base[0][3], "明")
+        self.assertOnly(self.problems(self.broken((0, 3, "日"))), "翌日が明ではありません")
+
     def test_after_without_night(self):
-        r = self.broken()
-        s, d = next(
-            (s, d) for s in range(self.count) for d in range(3, 28)
-            if r[s][d] == "日" and r[s][d - 1] == "日" and self.schedule[s][d] == ""
-            and self.ids[s] != self.leaders[d]
-        )
-        r[s][d] = "明"
-        self.assertDetected(self.problems(r), "明の前日が夜勤ではありません", "必要人数")
+        self.assertOnly(self.problems(self.broken((1, 17, "明"))), "明の前日が夜勤ではありません")
+
     def test_second_day_after_night_not_off(self):
-        r = self.broken()
-        s, d = next(
-            (s, d) for s in range(self.count) for d in range(27)
-            if r[s][d] in ("★", "☆") and self.schedule[s][d] == ""
-            and self.schedule[s][d + 2] == ""
-        )
-        r[s][d + 2] = "日"
-        self.assertDetected(self.problems(r), "翌々日が休みではありません", "休みが", "6連勤")
+        # 3日の夜勤（職員1）の翌々日(5日)を日にし、休みの数は別の日(2日)を休みにして保つ
+        r = self.broken((0, 4, "日"), (0, 1, "公休"))
+        self.assertOnly(self.problems(r), "翌々日が休みではありません")
+
     def test_day_shortage(self):
         r = self.broken()
-        d = 14
-        plain_days = [s for s in range(self.count) if r[s][d] == "日" and self.ids[s] != self.leaders[d]]
-        total = sum(r[s][d] in ("日", "7b") for s in range(self.count))
-        fixed_other = sum(r[s][d] not in ("日", "7b", "★", "☆", "明", "公休", "希", "有") for s in range(self.count))
-        for s in plain_days[: total + fixed_other - 4]:
-            r[s][d] = "公休"
-        self.assertDetected(self.problems(r), "必要人数")
+        day = 14
+        plain = [s for s in range(self.count)
+                 if r[s][day] == "日" and self.ids[s] != self.leaders[day]]
+        working = sum(r[s][day] in ("日", "7b") for s in range(self.count))
+        for s in plain[: working - 4]:
+            r[s][day] = "公休"
+        self.assertOnly(self.problems(r), "必要人数")
 
     def test_month_start_after_not_fixed(self):
-        r = self.broken()
-        s, d = self.pick("日", days=[0])
-        r[s][0] = "明"
-        self.assertDetected(self.problems(r), "前月持ち越しではありません", "必要人数")
+        self.assertEqual(self.schedule[1][0], "")
+        self.assertOnly(self.problems(self.broken((1, 0, "明"))), "前月持ち越しではありません")
+
     def test_day_after_month_start_after_not_off(self):
-        r = self.broken()
         self.assertEqual(self.schedule[4][0], "明")
-        r[4][1] = "日"
-        self.assertDetected(self.problems(r), "月初の明の翌日", "休みが", "6連勤")
+        r = self.broken((4, 1, "日"), (4, 2, "公休"))
+        self.assertOnly(self.problems(r), "月初の明の翌日")
 
     def test_unexpected_mark_in_blank_cell(self):
-        r = self.broken()
-        s, d = self.pick("日")
-        r[s][d] = "委"
-        self.assertDetected(self.problems(r), "想定外の記号")
-    def test_integer_strings_in_settings(self):
-        settings = {k: str(v) for k, v in BASE_SETTINGS.items()}
-        self.assertEqual(self.problems(settings=settings), [])
+        self.assertOnly(self.problems(self.broken((1, 17, "委"))), "想定外の記号")
 
     def test_missing_7b_on_weekday(self):
-        r = self.broken()
-        s, d = next((s, d) for s in range(self.count) for d in range(30)
-                    if r[s][d] == "7b" and self.schedule[s][d] == "" and calendar.weekday(2026, 9, d + 1) != 6)
-        r[s][d] = "日"
-        self.assertDetected(self.problems(r), "7bが0人")
+        self.assertEqual(self.base[0][14], "7b")
+        self.assertOnly(self.problems(self.broken((0, 14, "日"))), "7bが0人")
+
+    def test_two_7b_on_weekday(self):
+        self.assertOnly(self.problems(self.broken((0, 0, "7b"))), "7bが2人")
 
     def test_7b_on_sunday(self):
-        r = self.broken()
-        d = next(d for d in range(30) if calendar.weekday(2026, 9, d + 1) == 6)
-        s = next(s for s in range(self.count) if r[s][d] == "日")
-        r[s][d] = "7b"
-        self.assertDetected(self.problems(r), "固定ではない7b")
+        self.assertEqual(calendar.weekday(2026, 9, 13), 6)
+        self.assertOnly(self.problems(self.broken((0, 12, "7b"))), "固定ではない7b")
 
     def test_day_leader_outside_candidates(self):
         leaders = list(self.leaders)
-        d = next(d for d in range(30) if self.base[-1][d] in ("日", "7b"))
-        leaders[d] = self.ids[-1]
-        self.assertDetected(self.problems(leaders=leaders), "候補の範囲外")
+        leaders[0] = self.ids[-1]
+        self.assertOnly(self.problems(leaders=leaders), "候補の範囲外")
 
     def test_day_leader_not_working_day(self):
         leaders = list(self.leaders)
-        s, d = next((s, d) for s in range(10) for d in range(30) if self.base[s][d] not in ("日", "7b"))
-        leaders[d] = self.ids[s]
-        self.assertDetected(self.problems(leaders=leaders), "日/7bではありません")
+        self.assertEqual(self.base[0][4], "公休")
+        leaders[4] = self.ids[0]
+        self.assertOnly(self.problems(leaders=leaders), "日/7bではありません")
+
     def test_one_less_day_off(self):
-        r = self.broken()
-        off = ("公休", "希", "有")
-        s = next(s for s in range(self.count) if sum(m in off for m in self.schedule[s]) <= 9)
-        excess = sum(m in off for m in r[s]) - 8
-        cells = [d for d in range(30) if r[s][d] == "公休" and self.schedule[s][d] == ""]
-        for d in cells[:excess]:
-            r[s][d] = "日"
-        self.assertDetected(self.problems(r), "休みが", "夜勤の翌", "6連勤")
+        self.assertOnly(self.problems(self.broken((0, 9, "日"))), "休みが")
+
     def test_six_consecutive_work_days(self):
-        r = self.broken()
-        for d in range(6):
-            r[18][d + 9] = "日"
-        self.assertDetected(self.problems(r), "6連勤", "休みが", "7bが")
+        # 休みの数は保ったまま、職員1の27日からの連勤を6日以上にする
+        r = self.broken((0, 26, "日"), (0, 0, "公休"))
+        self.assertOnly(self.problems(r), "6連勤")
 
     def test_night_limit(self):
-        settings = {**BASE_SETTINGS, "max_night_shifts": 1}
-        self.assertDetected(self.problems(settings=settings), "上限")
+        settings = {**self.settings, "max_night_shifts": 1}
+        self.assertOnly(self.problems(settings=settings), "上限")
 
 
 if __name__ == "__main__":
