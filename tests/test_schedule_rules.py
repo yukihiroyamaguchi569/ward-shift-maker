@@ -112,8 +112,12 @@ class CheckerDetectsViolationTests(unittest.TestCase):
     def broken(self):
         return copy.deepcopy(self.base)
 
-    def assertDetected(self, problems, keyword):
+    def assertDetected(self, problems, keyword, *side_effects):
+        # 狙ったルールの違反が出ていて、それ以外は side_effects に挙げた
+        # 「その変異から必然的に起きる副次的な違反」だけであること。
         self.assertTrue(any(keyword in p for p in problems), problems)
+        allowed = (keyword,) + side_effects
+        self.assertTrue(all(any(k in p for k in allowed) for p in problems), problems)
 
     def test_base_is_clean(self):
         self.assertEqual(self.problems(), [])
@@ -138,19 +142,19 @@ class CheckerDetectsViolationTests(unittest.TestCase):
 
     def test_two_leaders(self):
         r = self.broken()
-        s = next(s for s in range(self.count) if r[s][14] == "日")
+        s = next(s for s in range(self.count) if r[s][14] == "日" and self.ids[s] != self.leaders[14])
         r[s][14] = "★"
-        self.assertDetected(self.problems(r), "★が2人")
+        self.assertDetected(self.problems(r), "★が2人", "夜勤の翌", "休みが", "6連勤")
 
     def test_night_outside_eligible(self):
         r = self.broken()
         r[18][14] = "☆"
-        self.assertDetected(self.problems(r), "夜勤候補の範囲外")
+        self.assertDetected(self.problems(r), "夜勤候補の範囲外", "☆が2人", "夜勤の翌", "休みが", "6連勤")
 
     def test_leader_outside_leader_candidates(self):
         r = self.broken()
         r[10][14] = "★"
-        self.assertDetected(self.problems(r), "リーダー候補の範囲外")
+        self.assertDetected(self.problems(r), "リーダー候補の範囲外", "★が2人", "夜勤の翌", "休みが", "6連勤")
 
     def test_after_replaced_by_day(self):
         r = self.broken()
@@ -160,7 +164,7 @@ class CheckerDetectsViolationTests(unittest.TestCase):
 
     def test_after_without_night(self):
         r = self.broken()
-        s, d = next((s, d) for s in range(self.count) for d in range(3, 28) if r[s][d] == "日" and r[s][d - 1] == "日")
+        s, d = next((s, d) for s in range(self.count) for d in range(3, 28) if r[s][d] == "日" and r[s][d - 1] == "日" and self.ids[s] != self.leaders[d])
         r[s][d] = "明"
         self.assertDetected(self.problems(r), "明の前日が夜勤ではありません")
 
@@ -168,14 +172,39 @@ class CheckerDetectsViolationTests(unittest.TestCase):
         r = self.broken()
         s, d = next((s, d) for s in range(self.count) for d in range(27) if r[s][d] in "★☆" and self.schedule[s][d] == "")
         r[s][d + 2] = "日"
-        self.assertDetected(self.problems(r), "翌々日が休みではありません")
+        self.assertDetected(self.problems(r), "翌々日が休みではありません", "休みが", "6連勤")
 
     def test_day_shortage(self):
         r = self.broken()
-        for s in range(self.count):
-            if r[s][14] in ("日", "7b"):
-                r[s][14] = "公休"
+        d = 14
+        plain_days = [s for s in range(self.count) if r[s][d] == "日" and self.ids[s] != self.leaders[d]]
+        total = sum(r[s][d] in ("日", "7b") for s in range(self.count))
+        fixed_other = sum(r[s][d] not in ("日", "7b", "★", "☆", "明", "公休", "希", "有") for s in range(self.count))
+        for s in plain_days[: total + fixed_other - 4]:
+            r[s][d] = "公休"
         self.assertDetected(self.problems(r), "必要人数")
+
+    def test_month_start_after_not_fixed(self):
+        r = self.broken()
+        s = next(s for s in range(self.count) if self.schedule[s][0] == "" and r[s][0] == "日" and self.ids[s] != self.leaders[0])
+        r[s][0] = "明"
+        self.assertDetected(self.problems(r), "前月持ち越しではありません")
+
+    def test_day_after_month_start_after_not_off(self):
+        r = self.broken()
+        self.assertEqual(self.schedule[4][0], "明")
+        r[4][1] = "日"
+        self.assertDetected(self.problems(r), "月初の明の翌日", "休みが", "6連勤")
+
+    def test_unexpected_mark_in_blank_cell(self):
+        r = self.broken()
+        s = next(s for s in range(self.count) if r[s][14] == "日" and self.schedule[s][14] == "" and self.ids[s] != self.leaders[14])
+        r[s][14] = "委"
+        self.assertDetected(self.problems(r), "想定外の記号")
+
+    def test_integer_strings_in_settings(self):
+        settings = {k: str(v) for k, v in BASE_SETTINGS.items()}
+        self.assertEqual(self.problems(settings=settings), [])
 
     def test_missing_7b_on_weekday(self):
         r = self.broken()
@@ -193,7 +222,8 @@ class CheckerDetectsViolationTests(unittest.TestCase):
 
     def test_day_leader_outside_candidates(self):
         leaders = list(self.leaders)
-        leaders[0] = self.ids[-1]
+        d = next(d for d in range(30) if self.base[-1][d] in ("日", "7b"))
+        leaders[d] = self.ids[-1]
         self.assertDetected(self.problems(leaders=leaders), "候補の範囲外")
 
     def test_day_leader_not_working_day(self):
@@ -207,13 +237,13 @@ class CheckerDetectsViolationTests(unittest.TestCase):
         s = next(s for s in range(self.count) if sum(m in ("公休", "希", "有") for m in r[s]) == 9)
         d = next(d for d in range(30) if r[s][d] == "公休" and self.schedule[s][d] == "")
         r[s][d] = "日"
-        self.assertDetected(self.problems(r), "休みが8日")
+        self.assertDetected(self.problems(r), "休みが8日", "夜勤の翌", "6連勤")
 
     def test_six_consecutive_work_days(self):
         r = self.broken()
         for d in range(6):
             r[18][d + 9] = "日"
-        self.assertDetected(self.problems(r), "6連勤")
+        self.assertDetected(self.problems(r), "6連勤", "休みが", "7bが")
 
     def test_night_limit(self):
         settings = {**BASE_SETTINGS, "max_night_shifts": 1}

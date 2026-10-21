@@ -15,6 +15,11 @@ AFTER = "明"
 OFF_MARKS = {"公休", "希", "有"}
 DAY_MARKS = {"日", "7b"}
 NIGHT_MARKS = {NIGHT_LEADER, NIGHT_PAIR}
+INT_SETTINGS = {
+    "day_leader_count", "night_leader_count", "night_eligible_count",
+    "max_night_shifts", "day_required_count", "sunday_day_required_count",
+    "days_off_count",
+}
 KNOWN_MARKS = OFF_MARKS | DAY_MARKS | NIGHT_MARKS | {AFTER}
 
 
@@ -50,6 +55,19 @@ def _check_shape(result, staff_count, day_count) -> List[str]:
     return problems
 
 
+SOLVER_MARKS = {NIGHT_LEADER, NIGHT_PAIR, AFTER, "日", "7b", "公休"}
+
+
+def _check_unexpected_marks(fixed, result, staff_count, day_count) -> List[str]:
+    """入力が空欄だったセルには、ソルバーが出す記号しか入らない。"""
+    return [
+        f"職員{s + 1}: {d + 1}日(入力は空欄)に想定外の記号「{result[s][d]}」があります"
+        for s in range(staff_count)
+        for d in range(day_count)
+        if fixed[s][d] == "" and result[s][d] not in SOLVER_MARKS
+    ]
+
+
 def _check_fixed_cells(fixed, result, staff_count, day_count) -> List[str]:
     return [
         f"職員{s + 1}: {d + 1}日の固定セル「{fixed[s][d]}」が「{result[s][d]}」に変わりました"
@@ -79,7 +97,7 @@ def _check_night_people(fixed, result, staff_count, day_count, rule) -> List[str
     return problems
 
 
-def _check_night_sets(result, staff_count, day_count) -> List[str]:
+def _check_night_sets(fixed, result, staff_count, day_count) -> List[str]:
     problems = []
     for s in range(staff_count):
         for d in range(day_count):
@@ -90,6 +108,11 @@ def _check_night_sets(result, staff_count, day_count) -> List[str]:
                     problems.append(f"職員{s + 1}: {d + 1}日の夜勤の翌々日が休みではありません")
             if result[s][d] == AFTER and d > 0 and result[s][d - 1] not in NIGHT_MARKS:
                 problems.append(f"職員{s + 1}: {d + 1}日の明の前日が夜勤ではありません")
+            if result[s][d] == AFTER and d == 0 and fixed[s][0] != AFTER:
+                problems.append(f"職員{s + 1}: 1日の明が入力で固定されていません（前月持ち越しではありません）")
+        # 月初の固定の明（前月持ち越し）の翌日は、入力が空欄なら休み
+        if day_count > 1 and fixed[s][0] == AFTER and fixed[s][1] == "" and result[s][1] not in OFF_MARKS:
+            problems.append(f"職員{s + 1}: 月初の明の翌日(2日)が休みではありません")
     return problems
 
 
@@ -170,12 +193,13 @@ def check_schedule(
     if problems:
         return problems
     fixed = _normalized_input(input_schedule, staff_count, day_count)
-    rule = dict(settings)
-    off_target = int(settings.get("days_off_count", 8 if month == 2 else 9))
+    rule = {key: int(value) for key, value in settings.items() if key in INT_SETTINGS}
+    off_target = rule.get("days_off_count", 8 if month == 2 else 9)
 
     problems += _check_fixed_cells(fixed, result, staff_count, day_count)
     problems += _check_night_people(fixed, result, staff_count, day_count, rule)
-    problems += _check_night_sets(result, staff_count, day_count)
+    problems += _check_unexpected_marks(fixed, result, staff_count, day_count)
+    problems += _check_night_sets(fixed, result, staff_count, day_count)
     problems += _check_day_staffing(fixed, result, year, month, staff_count, day_count, rule)
     problems += _check_day_leaders(result, day_leaders, staff_ids, day_count, rule)
     problems += _check_per_staff(fixed, result, staff_count, day_count, rule, off_target)
