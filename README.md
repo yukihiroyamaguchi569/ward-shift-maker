@@ -66,6 +66,7 @@ python -m unittest discover tests
 
 - 生成テストは制限時間（既定 30 秒）まで探索するため、`SOLVER_TIME_LIMIT_SECONDS=10` を付けると速くなります
 - 重いテストは `RUN_SLOW_TESTS=1` を付けたときだけ実行されます
+- 画面の E2E テスト（Playwright）は `tests/` とは別です。`pip install -r requirements-dev.txt` と `python -m playwright install chromium` のあと、`SOLVER_TIME_LIMIT_SECONDS=10 python -m unittest discover e2e` で実行します
 
 ### Render へのデプロイ
 

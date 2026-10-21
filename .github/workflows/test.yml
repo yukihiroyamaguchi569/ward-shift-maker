@@ -22,3 +22,21 @@ jobs:
         run: python -m unittest discover tests
         env:
           SOLVER_TIME_LIMIT_SECONDS: "10"
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Run E2E tests
+        run: python -m unittest discover e2e
+        env:
+          SOLVER_TIME_LIMIT_SECONDS: "10"
