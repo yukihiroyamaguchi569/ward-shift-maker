@@ -58,6 +58,15 @@ python main.py
 
 ブラウザで http://localhost:8000 にアクセスしてください。
 
+### テスト
+
+```bash
+python -m unittest discover tests
+```
+
+- 生成テストは制限時間（既定 30 秒）まで探索するため、`SOLVER_TIME_LIMIT_SECONDS=10` を付けると速くなります
+- 重いテストは `RUN_SLOW_TESTS=1` を付けたときだけ実行されます
+
 ### Render へのデプロイ
 
 1. GitHubにリポジトリをプッシュ
