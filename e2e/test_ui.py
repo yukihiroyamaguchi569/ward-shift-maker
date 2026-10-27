@@ -13,6 +13,7 @@ import time
 import unittest
 import urllib.request
 from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
 from openpyxl import Workbook
 from playwright.sync_api import expect, sync_playwright
@@ -26,6 +27,26 @@ UI_TIMEOUT_MS = 60000  # 生成は制限時間 10 秒＋余裕
 
 PRECHECK_MESSAGE = "このままでは勤務表を作成できません。"
 PASSWORD_WARNING = "Excel にパスワードがかかっていると読み込めません。"
+# フィードバック用フォームの仮の設定（本物の ID が入る前でもリンクの中身を確かめるため）
+FAKE_FEEDBACK_FORM = '''const FEEDBACK_FORM = {
+    url: "https://docs.google.com/forms/d/e/FAKE/viewform",
+    entries: {
+        operation: "entry.1",
+        version: "entry.2",
+        stage: "entry.3",
+        error: "entry.4",
+        userAgent: "entry.5",
+        datetime: "entry.6",
+    },
+};'''
+FEEDBACK_FIELDS = {
+    "entry.1": "operation",
+    "entry.2": "version",
+    "entry.3": "stage",
+    "entry.4": "error",
+    "entry.5": "userAgent",
+    "entry.6": "datetime",
+}
 PASSWORD_BYTES = (
     bytes.fromhex("D0CF11E0A1B11AE1")
     + b"\x00" * 16
@@ -160,6 +181,94 @@ class UiTests(unittest.TestCase):
         while not self.dialogs and time.monotonic() < deadline:
             self.page.wait_for_timeout(100)
         self.assertEqual(len(self.dialogs), 1, self.dialogs)
+
+    def use_fake_feedback_form(self):
+        """app.js の FEEDBACK_FORM を仮の設定に差し替えて読み込み直す"""
+        with open(os.path.join(ROOT, "static", "app.js"), encoding="utf-8") as f:
+            app_js = f.read()
+        start = app_js.index("const FEEDBACK_FORM = {")
+        end = app_js.index("};", start) + 2
+        patched = app_js[:start] + FAKE_FEEDBACK_FORM + app_js[end:]
+        self.page.route(
+            "**/static/app.js*",
+            lambda route: route.fulfill(body=patched, content_type="application/javascript"),
+        )
+        self.page.reload(wait_until="domcontentloaded")
+        self.page.fill("#targetMonth", MONTH)
+
+    def feedback_values(self):
+        """リンクを押す直前と同じように URL を作り直させ、事前入力の値を返す"""
+        self.page.dispatch_event("#feedbackLink", "pointerdown")
+        query = parse_qs(urlparse(self.page.get_attribute("#feedbackLink", "href")).query)
+        self.assertEqual(query.pop("usp"), ["pp_url"])
+        return {FEEDBACK_FIELDS[k]: v[0] for k, v in query.items()}
+
+    def test_feedback_link_hidden_until_form_is_configured(self):
+        expect(self.page.locator("#feedbackLink")).to_be_hidden()
+
+    def test_feedback_link_prefills_state(self):
+        self.use_fake_feedback_form()
+        link = self.page.locator("#feedbackLink")
+        expect(link).to_be_visible()
+        self.assertEqual(link.get_attribute("target"), "_blank")
+        values = self.feedback_values()
+        self.assertEqual(values["stage"], "ファイル未アップロード")
+        self.assertRegex(values["version"], r"^\d+\.\d+\.\d+$")
+        self.assertRegex(values["datetime"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertIn("userAgent", values)
+        self.assertNotIn("error", values)
+        # setUp / use_fake_feedback_form が対象年月を変えるので、最後の操作は設定の変更
+        self.assertEqual(values["operation"], "設定・プリセット")
+
+        # 失敗したアップロードのエラーが入り、次に成功したら消える
+        self.upload(b"x", "メモ.txt")
+        self.wait_for_dialog()
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "ファイルのアップロード")
+        self.assertEqual(values["error"], "xlsx形式のファイルを選択してください")
+
+        self.upload(make_xlsx(19))
+        self.page.locator("#staffCount", has_text="19名 × 30日").wait_for()
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "ファイルのアップロード")
+        self.assertEqual(values["stage"], "ファイル読み込み済み（シフト未作成）")
+        self.assertNotIn("error", values)
+
+    def test_feedback_link_records_precheck_conflict_after_settings_change(self):
+        self.use_fake_feedback_form()
+        self.upload(overbooked_day_29())
+        self.page.locator("#warningsList li", has_text=PRECHECK_MESSAGE).wait_for()
+        self.assertEqual(self.feedback_values()["operation"], "ファイルのアップロード")
+
+        self.page.fill("#maxNightShifts", "4")
+        # 設定を変えると操作は「設定・プリセット」になり、作成前チェックの結果が入り直す
+        self.page.wait_for_function(
+            "document.getElementById('presetSelect').value === '__custom__'"
+        )
+        self.page.locator("#warningsList li", has_text=PRECHECK_MESSAGE).wait_for()
+        expect(self.page.locator("#feedbackLink")).to_be_visible()
+        deadline = time.monotonic() + DIALOG_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            values = self.feedback_values()
+            if "error" in values:
+                break
+            self.page.wait_for_timeout(100)
+        self.assertEqual(values["operation"], "設定・プリセット")
+        self.assertIn(PRECHECK_MESSAGE, values["error"])
+        self.assertIn("29日", values["error"])
+
+    def test_feedback_link_records_generation_warnings(self):
+        self.use_fake_feedback_form()
+        self.page.fill("#dayLeaderCount", "3")
+        self.upload(day_leader_blocked())
+        self.page.click("#generateBtn")
+        self.page.locator(
+            "#warningsList li", has_text="条件を満たす勤務表が見つかりませんでした。"
+        ).wait_for()
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "シフト作成")
+        self.assertIn("条件を満たす勤務表が見つかりませんでした。", values["error"])
+        self.assertLessEqual(len(values["error"]), 300)
 
     def test_upload_generate_and_download(self):
         self.upload(make_xlsx(19))

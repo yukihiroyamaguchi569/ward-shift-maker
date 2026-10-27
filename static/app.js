@@ -21,7 +21,7 @@ let lastOperation = null;   // Key of the last started operation (see FEEDBACK_O
 
 // Pre-filled Google Form opened by the feedback link.
 // Fill in url and entry IDs from the log of createFeedbackForm (GAS); the link stays
-// hidden while they are empty. Update them if the form is rebuilt.
+// hidden until the url and every entry ID are filled in. Update them if the form is rebuilt.
 // The app version is read from the #appVersion element in index.html.
 const FEEDBACK_FORM = {
     url: "",
@@ -70,6 +70,7 @@ const appVersion = document.getElementById("appVersion");
 
 // 年月変更時にテーブルを再描画
 targetMonth.addEventListener("change", () => {
+    startOperation("settings");
     if (uploadedData) {
         const sched = generatedSchedule || uploadedData.schedule;
         const orig = generatedSchedule ? originalSchedule : null;
@@ -145,7 +146,7 @@ function applyPreset(name) {
 }
 
 function savePreset() {
-    lastOperation = "settings";
+    startOperation("settings");
     const name = prompt("プリセット名を入力してください:");
     if (!name || !name.trim()) return;
     const trimmed = name.trim();
@@ -169,7 +170,7 @@ function savePreset() {
 }
 
 function deletePreset() {
-    lastOperation = "settings";
+    startOperation("settings");
     const name = presetSelect.value;
     if (name === "__custom__") return;
 
@@ -192,6 +193,7 @@ function deletePreset() {
 presetSelect.addEventListener("change", () => {
     const name = presetSelect.value;
     if (name !== "__custom__") {
+        startOperation("settings");
         applyPreset(name);
         schedulePrecheck();
     }
@@ -203,6 +205,7 @@ presetDeleteBtn.addEventListener("click", deletePreset);
 // 設定値の手動変更を検知して「(カスタム)」に切り替え
 for (const key of SETTING_KEYS) {
     document.getElementById(key).addEventListener("input", () => {
+        startOperation("settings");
         presetSelect.value = "__custom__";
         schedulePrecheck();
     });
@@ -270,7 +273,7 @@ fileInput.addEventListener("change", () => {
 });
 
 async function handleFileUpload(file) {
-    lastOperation = "upload";
+    startOperation("upload");
     if (!file.name.match(/\.xlsx?$/i)) {
         showError("xlsx形式のファイルを選択してください");
         return;
@@ -388,7 +391,7 @@ generateBtn.addEventListener("click", () => generateShift());
 
 async function generateShift() {
     if (!uploadedData) return;
-    lastOperation = generatedSchedule ? "regenerate" : "generate";
+    startOperation(generatedSchedule ? "regenerate" : "generate");
 
     const settings = getSettings();
 
@@ -436,6 +439,7 @@ async function generateShift() {
 
         // 警告表示
         if (result.warnings && result.warnings.length > 0) {
+            lastErrorMessage = result.warnings.join(" ");
             showWarnings(result.warnings);
         } else {
             hideWarnings();
@@ -454,7 +458,7 @@ async function generateShift() {
 
 downloadBtn.addEventListener("click", async () => {
     if (!generatedSchedule) return;
-    lastOperation = "download";
+    startOperation("download");
 
     try {
         showLoading(true);
@@ -745,6 +749,12 @@ function hideWarnings() {
     warningsClearTimer = setTimeout(() => { warningsList.innerHTML = ""; }, 500);
 }
 
+// Record the operation for feedback and forget errors from earlier operations
+function startOperation(key) {
+    lastOperation = key;
+    lastErrorMessage = "";
+}
+
 function showError(message) {
     lastErrorMessage = message || "";
     alert(message);
@@ -770,7 +780,7 @@ function collectFeedbackValues() {
             isLoading: !loading.classList.contains("panel-hidden"),
         }),
         error: truncateText(lastErrorMessage, FEEDBACK_ERROR_MAX_LENGTH),
-        userAgent: navigator.userAgent,
+        userAgent: truncateText(navigator.userAgent, FEEDBACK_USER_AGENT_MAX_LENGTH),
         datetime: formatLocalDateTime(new Date()),
     };
 }
@@ -786,5 +796,5 @@ if (isFeedbackConfigured(FEEDBACK_FORM)) {
         feedbackLink.addEventListener(type, refreshFeedbackHref);
     }
     refreshFeedbackHref();
-    feedbackLink.classList.remove("hidden");
+    feedbackLink.hidden = false;
 }

@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
     FEEDBACK_ERROR_MAX_LENGTH,
+    FEEDBACK_USER_AGENT_MAX_LENGTH,
     truncateText,
     formatLocalDateTime,
     describeStage,
@@ -41,13 +42,26 @@ test("buildFeedbackUrl: ignores values with no configured entry", () => {
     assert.equal(url.search.includes("secret"), false);
 });
 
-test("isFeedbackConfigured: false until the URL and an entry ID are set", () => {
+test("isFeedbackConfigured: false until the URL and every entry ID are set", () => {
     assert.equal(isFeedbackConfigured({ url: "", entries: { version: "" } }), false);
     assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { version: "", error: "" } }), false);
     assert.equal(isFeedbackConfigured({ url: "", entries: { version: "entry.1" } }), false);
     assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: {} }), false);
+    assert.equal(isFeedbackConfigured({ url: CONFIG.url }), false);
     assert.equal(isFeedbackConfigured(null), false);
     assert.equal(isFeedbackConfigured(CONFIG), true);
+});
+
+test("isFeedbackConfigured: a partly filled config keeps the link hidden", () => {
+    const partial = { url: CONFIG.url, entries: { version: "entry.1", error: "", operation: "entry.3" } };
+    assert.equal(isFeedbackConfigured(partial), false);
+});
+
+test("isFeedbackConfigured: rejects non-form URLs and malformed entry IDs", () => {
+    assert.equal(isFeedbackConfigured({ url: "https://example.com/form", entries: CONFIG.entries }), false);
+    assert.equal(isFeedbackConfigured({ url: "javascript:alert(1)", entries: CONFIG.entries }), false);
+    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { version: "1234" } }), false);
+    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { version: "entry.abc" } }), false);
 });
 
 test("truncateText: keeps short text, cuts long text at the limit", () => {
@@ -68,6 +82,23 @@ test("truncateText: result including the ellipsis never exceeds the limit", () =
     assert.ok(cut.endsWith("…"));
     const exact = "エ".repeat(FEEDBACK_ERROR_MAX_LENGTH);
     assert.equal(truncateText(exact, FEEDBACK_ERROR_MAX_LENGTH), exact);
+});
+
+test("worst case: long non-ASCII error and User-Agent keep the URL within a safe length", () => {
+    const config = {
+        url: CONFIG.url,
+        entries: { version: "entry.1", stage: "entry.2", error: "entry.3", userAgent: "entry.4", datetime: "entry.5", operation: "entry.6" },
+    };
+    const url = buildFeedbackUrl(config, {
+        version: "1.5.0",
+        stage: describeStage({ hasUpload: true, hasGenerated: true, isLoading: true }),
+        error: truncateText("エ".repeat(5000), FEEDBACK_ERROR_MAX_LENGTH),
+        userAgent: truncateText("ブ".repeat(5000), FEEDBACK_USER_AGENT_MAX_LENGTH),
+        datetime: "2026-10-27 22:00:00",
+        operation: "設定・プリセット",
+    });
+    // Google Forms pre-filled links work well below ~8000 characters
+    assert.ok(url.length < 8000, `url length ${url.length}`);
 });
 
 test("long error keeps the whole URL within a safe length", () => {

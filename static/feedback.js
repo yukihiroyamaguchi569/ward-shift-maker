@@ -4,6 +4,8 @@
  */
 
 const FEEDBACK_ERROR_MAX_LENGTH = 300;
+const FEEDBACK_USER_AGENT_MAX_LENGTH = 300;
+const FEEDBACK_FORM_URL_PREFIX = "https://docs.google.com/forms/";
 
 // Operation keys recorded by app.js -> choice labels on the Google Form
 // (the form also has "その他", which the app never pre-fills)
@@ -45,9 +47,11 @@ function operationLabel(operationKey) {
         : "";
 }
 
-// The link is shown only after the form URL and at least one entry ID are filled in
+// The link is shown only after the form URL and every entry ID are filled in
 function isFeedbackConfigured(config) {
-    return Boolean(config && config.url && Object.values(config.entries || {}).some(Boolean));
+    if (!config || typeof config.url !== "string" || !config.url.startsWith(FEEDBACK_FORM_URL_PREFIX)) return false;
+    const entryIds = Object.values(config.entries || {});
+    return entryIds.length > 0 && entryIds.every((id) => /^entry\.\d+$/.test(id));
 }
 
 /**
@@ -69,6 +73,7 @@ function buildFeedbackUrl(config, values) {
 if (typeof module !== "undefined") {
     module.exports = {
         FEEDBACK_ERROR_MAX_LENGTH,
+        FEEDBACK_USER_AGENT_MAX_LENGTH,
         FEEDBACK_OPERATION_LABELS,
         truncateText,
         formatLocalDateTime,
