@@ -273,7 +273,7 @@ fileInput.addEventListener("change", () => {
 });
 
 async function handleFileUpload(file) {
-    startOperation("upload");
+    const operation = startOperation("upload");
     if (!file.name.match(/\.xlsx?$/i)) {
         showError("xlsx形式のファイルを選択してください");
         return;
@@ -316,7 +316,7 @@ async function handleFileUpload(file) {
         runPrecheck();
 
     } catch (err) {
-        showError(err.message);
+        showError(err.message, operation);
     } finally {
         showLoading(false);
     }
@@ -389,7 +389,7 @@ generateBtn.addEventListener("click", () => generateShift());
 
 async function generateShift() {
     if (!uploadedData) return;
-    startOperation(generatedSchedule ? "regenerate" : "generate");
+    const operation = startOperation(generatedSchedule ? "regenerate" : "generate");
 
     const settings = getSettings();
 
@@ -443,7 +443,7 @@ async function generateShift() {
         }
 
     } catch (err) {
-        showError(err.message);
+        showError(err.message, operation);
     } finally {
         showLoading(false);
     }
@@ -455,7 +455,7 @@ async function generateShift() {
 
 downloadBtn.addEventListener("click", async () => {
     if (!generatedSchedule) return;
-    startOperation("download");
+    const operation = startOperation("download");
 
     try {
         showLoading(true);
@@ -487,7 +487,7 @@ downloadBtn.addEventListener("click", async () => {
         URL.revokeObjectURL(url);
 
     } catch (err) {
-        showError(err.message);
+        showError(err.message, operation);
     } finally {
         showLoading(false);
     }
@@ -746,13 +746,17 @@ function hideWarnings() {
     warningsClearTimer = setTimeout(() => { warningsList.innerHTML = ""; }, 500);
 }
 
-// Record the operation for feedback and forget errors from earlier operations
+// Record the operation for feedback and forget errors from earlier operations.
+// Returns the key so async handlers can report their error under it.
 function startOperation(key) {
     lastOperation = key;
     lastErrorMessage = "";
+    return key;
 }
 
-function showError(message) {
+// operation: the key of the request that failed, in case another operation started meanwhile
+function showError(message, operation) {
+    if (operation) lastOperation = operation;
     lastErrorMessage = message || "";
     alert(message);
 }

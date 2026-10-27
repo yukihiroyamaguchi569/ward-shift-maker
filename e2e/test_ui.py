@@ -270,6 +270,26 @@ class UiTests(unittest.TestCase):
         self.assertIn(PRECHECK_MESSAGE, values["error"])
         self.assertIn("29日", values["error"])
 
+    def test_feedback_link_keeps_failed_operation_when_settings_change_meanwhile(self):
+        self.use_fake_feedback_form()
+        self.upload(make_xlsx(19))
+        self.page.locator("#staffCount", has_text="19名 × 30日").wait_for()
+        pending = []
+        self.page.route("**/api/generate", lambda route: pending.append(route))
+        self.page.click("#generateBtn")
+        deadline = time.monotonic() + DIALOG_WAIT_SECONDS
+        while not pending and time.monotonic() < deadline:
+            self.page.wait_for_timeout(100)
+        self.assertEqual(len(pending), 1)
+        # 作成の応答を待つ間に設定を変える
+        self.page.fill("#maxNightShifts", "4")
+        self.assertEqual(self.feedback_values()["operation"], "設定・プリセット")
+        pending[0].fulfill(status=500, content_type="application/json", body='{"detail": "サーバーエラーです"}')
+        self.wait_for_dialog()
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "シフト作成")
+        self.assertEqual(values["error"], "サーバーエラーです")
+
     def test_feedback_link_records_generation_warnings(self):
         self.use_fake_feedback_form()
         self.page.fill("#dayLeaderCount", "3")
