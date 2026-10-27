@@ -425,3 +425,8 @@ body {
         padding: 2px 1px;
     }
 }
+
+/* Feedback link: keep hidden until the form is configured (beats Tailwind's .flex, works without the CDN) */
+#feedbackLink[hidden] {
+    display: none;
+}
