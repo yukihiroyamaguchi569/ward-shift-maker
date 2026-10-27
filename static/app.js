@@ -12,6 +12,28 @@ let generatedSchedule = null; // 生成済みスケジュール
 let generatedDayLeaders = null; // 日ごとの日勤リーダー staff_id リスト
 let precheckSeq = 0; // 作成前チェックの世代番号（古い応答を捨てるため）
 let precheckTimer = null; // 設定変更時のデバウンス用タイマー
+let lastErrorMessage = "";  // Last error shown to the user (sent with feedback)
+let lastOperation = null;   // Key of the last started operation (see FEEDBACK_OPERATION_LABELS)
+
+// =========================================================
+// フィードバック用 Google フォーム
+// =========================================================
+
+// Pre-filled Google Form opened by the feedback link.
+// Fill in url and entry IDs from the log of createFeedbackForm (GAS); the link stays
+// hidden while they are empty. Update them if the form is rebuilt.
+// The app version is read from the #appVersion element in index.html.
+const FEEDBACK_FORM = {
+    url: "",
+    entries: {
+        operation: "",
+        version: "",
+        stage: "",
+        error: "",
+        userAgent: "",
+        datetime: "",
+    },
+};
 
 // =========================================================
 // DOM要素
@@ -30,6 +52,8 @@ const warningsList = document.getElementById("warningsList");
 const tablePanel = document.getElementById("tablePanel");
 const scheduleTable = document.getElementById("scheduleTable");
 const targetMonth = document.getElementById("targetMonth");
+const feedbackLink = document.getElementById("feedbackLink");
+const appVersion = document.getElementById("appVersion");
 
 // =========================================================
 // 年月ピッカー初期化
@@ -121,12 +145,13 @@ function applyPreset(name) {
 }
 
 function savePreset() {
+    lastOperation = "settings";
     const name = prompt("プリセット名を入力してください:");
     if (!name || !name.trim()) return;
     const trimmed = name.trim();
 
     if (trimmed === "__custom__") {
-        alert("この名前は使用できません。");
+        showError("この名前は使用できません。");
         return;
     }
 
@@ -144,11 +169,12 @@ function savePreset() {
 }
 
 function deletePreset() {
+    lastOperation = "settings";
     const name = presetSelect.value;
     if (name === "__custom__") return;
 
     if (DEFAULT_PRESETS[name]) {
-        alert("固定プリセットは削除できません。");
+        showError("固定プリセットは削除できません。");
         return;
     }
 
@@ -244,8 +270,9 @@ fileInput.addEventListener("change", () => {
 });
 
 async function handleFileUpload(file) {
+    lastOperation = "upload";
     if (!file.name.match(/\.xlsx?$/i)) {
-        alert("xlsx形式のファイルを選択してください");
+        showError("xlsx形式のファイルを選択してください");
         return;
     }
 
@@ -286,7 +313,7 @@ async function handleFileUpload(file) {
         runPrecheck();
 
     } catch (err) {
-        alert(err.message);
+        showError(err.message);
     } finally {
         showLoading(false);
     }
@@ -337,7 +364,9 @@ async function runPrecheck() {
         const conflicts = result.conflicts || [];
         const notices = result.notices || [];
         if (conflicts.length > 0) {
-            showWarnings(["このままでは勤務表を作成できません。", ...conflicts, ...notices]);
+            const blocking = ["このままでは勤務表を作成できません。", ...conflicts];
+            lastErrorMessage = blocking.join(" ");
+            showWarnings([...blocking, ...notices]);
         } else if (notices.length > 0) {
             showWarnings(notices);
         } else {
@@ -359,6 +388,7 @@ generateBtn.addEventListener("click", () => generateShift());
 
 async function generateShift() {
     if (!uploadedData) return;
+    lastOperation = generatedSchedule ? "regenerate" : "generate";
 
     const settings = getSettings();
 
@@ -412,7 +442,7 @@ async function generateShift() {
         }
 
     } catch (err) {
-        alert(err.message);
+        showError(err.message);
     } finally {
         showLoading(false);
     }
@@ -424,6 +454,7 @@ async function generateShift() {
 
 downloadBtn.addEventListener("click", async () => {
     if (!generatedSchedule) return;
+    lastOperation = "download";
 
     try {
         showLoading(true);
@@ -455,7 +486,7 @@ downloadBtn.addEventListener("click", async () => {
         URL.revokeObjectURL(url);
 
     } catch (err) {
-        alert(err.message);
+        showError(err.message);
     } finally {
         showLoading(false);
     }
@@ -714,8 +745,46 @@ function hideWarnings() {
     warningsClearTimer = setTimeout(() => { warningsList.innerHTML = ""; }, 500);
 }
 
+function showError(message) {
+    lastErrorMessage = message || "";
+    alert(message);
+}
+
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
+}
+
+// =========================================================
+// フィードバックリンク
+// =========================================================
+
+function collectFeedbackValues() {
+    return {
+        operation: operationLabel(lastOperation),
+        version: appVersion ? appVersion.textContent.trim().replace(/^v/, "") : "",
+        stage: describeStage({
+            hasUpload: !!uploadedData,
+            hasGenerated: !!generatedSchedule,
+            isLoading: !loading.classList.contains("panel-hidden"),
+        }),
+        error: truncateText(lastErrorMessage, FEEDBACK_ERROR_MAX_LENGTH),
+        userAgent: navigator.userAgent,
+        datetime: formatLocalDateTime(new Date()),
+    };
+}
+
+function refreshFeedbackHref() {
+    feedbackLink.href = buildFeedbackUrl(FEEDBACK_FORM, collectFeedbackValues());
+}
+
+if (isFeedbackConfigured(FEEDBACK_FORM)) {
+    // Refresh href right before any way of opening the link (left/middle click,
+    // context menu "open in new tab", keyboard) so it reflects the current state
+    for (const type of ["pointerdown", "focus", "contextmenu", "click"]) {
+        feedbackLink.addEventListener(type, refreshFeedbackHref);
+    }
+    refreshFeedbackHref();
+    feedbackLink.classList.remove("hidden");
 }
