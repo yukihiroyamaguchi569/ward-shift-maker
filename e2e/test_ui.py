@@ -47,6 +47,10 @@ FEEDBACK_FIELDS = {
     "entry.5": "userAgent",
     "entry.6": "datetime",
 }
+EMPTY_FEEDBACK_FORM = '''const FEEDBACK_FORM = {
+    url: "",
+    entries: { operation: "", version: "", stage: "", error: "", userAgent: "", datetime: "" },
+};'''
 PASSWORD_BYTES = (
     bytes.fromhex("D0CF11E0A1B11AE1")
     + b"\x00" * 16
@@ -182,13 +186,13 @@ class UiTests(unittest.TestCase):
             self.page.wait_for_timeout(100)
         self.assertEqual(len(self.dialogs), 1, self.dialogs)
 
-    def use_fake_feedback_form(self):
+    def use_fake_feedback_form(self, form_js=FAKE_FEEDBACK_FORM):
         """app.js の FEEDBACK_FORM を仮の設定に差し替えて読み込み直す"""
         with open(os.path.join(ROOT, "static", "app.js"), encoding="utf-8") as f:
             app_js = f.read()
         start = app_js.index("const FEEDBACK_FORM = {")
         end = app_js.index("};", start) + 2
-        patched = app_js[:start] + FAKE_FEEDBACK_FORM + app_js[end:]
+        patched = app_js[:start] + form_js + app_js[end:]
         self.page.route(
             "**/static/app.js*",
             lambda route: route.fulfill(body=patched, content_type="application/javascript"),
@@ -204,6 +208,7 @@ class UiTests(unittest.TestCase):
         return {FEEDBACK_FIELDS[k]: v[0] for k, v in query.items()}
 
     def test_feedback_link_hidden_until_form_is_configured(self):
+        self.use_fake_feedback_form(EMPTY_FEEDBACK_FORM)
         expect(self.page.locator("#feedbackLink")).to_be_hidden()
 
     def test_feedback_link_prefills_state(self):

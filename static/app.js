@@ -24,14 +24,14 @@ let lastOperation = null;   // Key of the last started operation (see FEEDBACK_O
 // hidden until the url and every entry ID are filled in. Update them if the form is rebuilt.
 // The app version is read from the #appVersion element in index.html.
 const FEEDBACK_FORM = {
-    url: "",
+    url: "https://docs.google.com/forms/d/e/1FAIpQLSfs6z93Oe-eNCxRVhJmv-F_akWL48nebU48n8ISgbnFJ_FF9g/viewform",
     entries: {
-        operation: "",
-        version: "",
-        stage: "",
-        error: "",
-        userAgent: "",
-        datetime: "",
+        operation: "entry.114036953",
+        version: "entry.1359161781",
+        stage: "entry.1532072117",
+        error: "entry.378841556",
+        userAgent: "entry.2053016164",
+        datetime: "entry.280541932",
     },
 };
 
