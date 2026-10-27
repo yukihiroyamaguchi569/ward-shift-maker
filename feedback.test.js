@@ -9,8 +9,17 @@ const {
     describeStage,
     operationLabel,
     isFeedbackConfigured,
+    composeErrorText,
     buildFeedbackUrl,
 } = require("./static/feedback.js");
+
+const FULL_CONFIG = {
+    url: "https://docs.google.com/forms/d/e/FORM/viewform",
+    entries: {
+        operation: "entry.1", version: "entry.2", stage: "entry.3",
+        error: "entry.4", userAgent: "entry.5", datetime: "entry.6",
+    },
+};
 
 const CONFIG = {
     url: "https://docs.google.com/forms/d/e/FORM/viewform",
@@ -49,7 +58,23 @@ test("isFeedbackConfigured: false until the URL and every entry ID are set", () 
     assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: {} }), false);
     assert.equal(isFeedbackConfigured({ url: CONFIG.url }), false);
     assert.equal(isFeedbackConfigured(null), false);
-    assert.equal(isFeedbackConfigured(CONFIG), true);
+    assert.equal(isFeedbackConfigured(FULL_CONFIG), true);
+});
+
+test("isFeedbackConfigured: a missing field keeps the link hidden", () => {
+    assert.equal(isFeedbackConfigured(CONFIG), false);
+    const { datetime, ...withoutDatetime } = FULL_CONFIG.entries;
+    assert.equal(isFeedbackConfigured({ url: FULL_CONFIG.url, entries: withoutDatetime }), false);
+    // Extra keys do not matter
+    assert.equal(isFeedbackConfigured({ url: FULL_CONFIG.url, entries: { ...FULL_CONFIG.entries, extra: "" } }), true);
+});
+
+test("composeErrorText: joins the alert and the warnings on screen, skipping empties", () => {
+    assert.equal(composeErrorText("", []), "");
+    assert.equal(composeErrorText("", null), "");
+    assert.equal(composeErrorText("失敗", []), "失敗");
+    assert.equal(composeErrorText("", ["警告1", "警告2"]), "警告1 警告2");
+    assert.equal(composeErrorText("失敗", ["", "警告"]), "失敗 警告");
 });
 
 test("isFeedbackConfigured: a partly filled config keeps the link hidden", () => {
@@ -60,8 +85,9 @@ test("isFeedbackConfigured: a partly filled config keeps the link hidden", () =>
 test("isFeedbackConfigured: rejects non-form URLs and malformed entry IDs", () => {
     assert.equal(isFeedbackConfigured({ url: "https://example.com/form", entries: CONFIG.entries }), false);
     assert.equal(isFeedbackConfigured({ url: "javascript:alert(1)", entries: CONFIG.entries }), false);
-    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { version: "1234" } }), false);
-    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { version: "entry.abc" } }), false);
+    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { ...FULL_CONFIG.entries, version: "1234" } }), false);
+    assert.equal(isFeedbackConfigured({ url: CONFIG.url, entries: { ...FULL_CONFIG.entries, version: "entry.abc" } }), false);
+    assert.equal(isFeedbackConfigured({ url: "https://example.com/form", entries: FULL_CONFIG.entries }), false);
 });
 
 test("truncateText: keeps short text, cuts long text at the limit", () => {

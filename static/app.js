@@ -12,7 +12,7 @@ let generatedSchedule = null; // 生成済みスケジュール
 let generatedDayLeaders = null; // 日ごとの日勤リーダー staff_id リスト
 let precheckSeq = 0; // 作成前チェックの世代番号（古い応答を捨てるため）
 let precheckTimer = null; // 設定変更時のデバウンス用タイマー
-let lastErrorMessage = "";  // Last error shown to the user (sent with feedback)
+let lastErrorMessage = "";  // Last alert of the current operation (sent with feedback)
 let lastOperation = null;   // Key of the last started operation (see FEEDBACK_OPERATION_LABELS)
 
 // =========================================================
@@ -367,9 +367,7 @@ async function runPrecheck() {
         const conflicts = result.conflicts || [];
         const notices = result.notices || [];
         if (conflicts.length > 0) {
-            const blocking = ["このままでは勤務表を作成できません。", ...conflicts];
-            lastErrorMessage = blocking.join(" ");
-            showWarnings([...blocking, ...notices]);
+            showWarnings(["このままでは勤務表を作成できません。", ...conflicts, ...notices]);
         } else if (notices.length > 0) {
             showWarnings(notices);
         } else {
@@ -439,7 +437,6 @@ async function generateShift() {
 
         // 警告表示
         if (result.warnings && result.warnings.length > 0) {
-            lastErrorMessage = result.warnings.join(" ");
             showWarnings(result.warnings);
         } else {
             hideWarnings();
@@ -779,10 +776,15 @@ function collectFeedbackValues() {
             hasGenerated: !!generatedSchedule,
             isLoading: !loading.classList.contains("panel-hidden"),
         }),
-        error: truncateText(lastErrorMessage, FEEDBACK_ERROR_MAX_LENGTH),
+        error: truncateText(composeErrorText(lastErrorMessage, visibleWarnings()), FEEDBACK_ERROR_MAX_LENGTH),
         userAgent: truncateText(navigator.userAgent, FEEDBACK_USER_AGENT_MAX_LENGTH),
         datetime: formatLocalDateTime(new Date()),
     };
+}
+
+function visibleWarnings() {
+    if (warningsPanel.classList.contains("panel-hidden")) return [];
+    return Array.from(warningsList.querySelectorAll("li"), (li) => li.textContent);
 }
 
 function refreshFeedbackHref() {

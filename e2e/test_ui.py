@@ -234,6 +234,19 @@ class UiTests(unittest.TestCase):
         self.assertEqual(values["stage"], "ファイル読み込み済み（シフト未作成）")
         self.assertNotIn("error", values)
 
+        self.page.click("#generateBtn")
+        self.page.locator("#generateBtn", has_text="再作成").wait_for()
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "シフト作成")
+        self.assertEqual(values["stage"], "シフト作成済み")
+        # エラー欄は、いま画面に出ている警告と同じ（無ければ空）
+        panel_hidden = "panel-hidden" in self.page.get_attribute("#warningsPanel", "class")
+        on_screen = "" if panel_hidden else " ".join(self.page.locator("#warningsList li").all_inner_texts())
+        if on_screen:
+            self.assertTrue(on_screen.startswith(values["error"].rstrip("…")), values["error"])
+        else:
+            self.assertNotIn("error", values)
+
     def test_feedback_link_records_precheck_conflict_after_settings_change(self):
         self.use_fake_feedback_form()
         self.upload(overbooked_day_29())
@@ -269,6 +282,12 @@ class UiTests(unittest.TestCase):
         self.assertEqual(values["operation"], "シフト作成")
         self.assertIn("条件を満たす勤務表が見つかりませんでした。", values["error"])
         self.assertLessEqual(len(values["error"]), 300)
+
+        # 設定を変えても警告は画面に残るので、エラー欄にも残る
+        self.page.fill("#maxNightShifts", "4")
+        values = self.feedback_values()
+        self.assertEqual(values["operation"], "設定・プリセット")
+        self.assertIn("条件を満たす勤務表が見つかりませんでした。", values["error"])
 
     def test_upload_generate_and_download(self):
         self.upload(make_xlsx(19))
